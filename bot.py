@@ -14,9 +14,6 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Float, JSON, DateTime, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,180 +23,78 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not found!")
 
-# Database setup
-DATABASE_URL = os.getenv('DATABASE_URL')
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable not found!")
-
-# Create database engine
-engine = create_engine(DATABASE_URL)
-Base = declarative_base()
-Session = sessionmaker(bind=engine)
-
-# Define database models
-class User(Base):
-    __tablename__ = 'users'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(String, unique=True)
-    name = Column(String)
-    balance = Column(Float, default=0.0)
-    daily_price = Column(Float, default=25000.0)
-    is_admin = Column(Boolean, default=False)
-
-class Attendance(Base):
-    __tablename__ = 'attendance'
-    id = Column(Integer, primary_key=True)
-    date = Column(String)
-    user_id = Column(String)
-    status = Column(String)  # 'confirmed' or 'declined'
-    menu_choice = Column(String)
-
-class Kassa(Base):
-    __tablename__ = 'kassa'
-    id = Column(Integer, primary_key=True)
-    amount = Column(Float, default=0.0)
-
-# Create tables
-Base.metadata.create_all(engine)
-
 # ---------------------- Configuration and Global Variables ---------------------- #
 
 # Enable logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Timezone setup
-TASHKENT_TZ = pytz.timezone('Asia/Tashkent')
+# Set Tashkent timezone
+TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
 
-# Conversation states
-CHOOSING, CONFIRMING, MENU_CHOICE = range(3)
+# Conversation states for registration and name change
+PHONE, NAME = range(2)
+NAME_CHANGE = 200
 
-# Keyboard layouts
-reply_keyboard = [
-    [KeyboardButton("✅ Ha"), KeyboardButton("❌ Yo'q")],
-    [KeyboardButton("💰 Balans"), KeyboardButton("📊 Statistika")],
-    [KeyboardButton("👥 Qatnashuvchilar"), KeyboardButton("🍽️ Menyu")],
-]
-markup = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
+# Conversation states for admin balance modification (modify user's balance)
+ADMIN_BALANCE_SELECT_USER, ADMIN_BALANCE_ENTER_AMOUNT = range(100, 102)
+# Conversation states for admin daily price adjustment (set user's daily price)
+ADMIN_DAILY_PRICE_SELECT_USER, ADMIN_DAILY_PRICE_ENTER_AMOUNT = range(102, 104)
 
-# Menu options
+# File paths
+DATA_FILE = "data.json"
+ADMIN_FILE = "admins.json"
+
+# Global lunch menu options mapping (menu option number -> dish name)
 MENU_OPTIONS = {
-    "1": "Osh",
-    "2": "Lag'mon",
-    "3": "Manti",
+    "1": "Qovurma Lag'mon",
+    "2": "Teftel Jarkob",
+    "3": "Mastava",
     "4": "Sho'rva",
-    "5": "Chuchvara",
-    "6": "Qozon kabob",
-    "7": "Norin",
-    "8": "Besh barmoq",
-    "9": "Mastava",
-    "10": "Somsa"
+    "5": "Sokoro",
+    "6": "Do'lma",
+    "7": "Teftel sho'rva",
+    "8": "Suyuq lag'mon",
+    "9": "Osh",
+    "10": "Qovurma Makron",
+    "11": "Xonim"
 }
 
-# Initialize database session
-def get_db_session():
-    return Session()
-
-# ---------------------- Helper Functions ---------------------- #
+# ---------------------- Data and Admin Initialization ---------------------- #
 
 def initialize_data():
-    session = get_db_session()
-    try:
-        # Check if kassa exists
-        kassa = session.query(Kassa).first()
-        if not kassa:
-            kassa = Kassa(amount=0.0)
-            session.add(kassa)
-            session.commit()
-
-        # Initialize daily attendance if not exists
-        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-        attendance = session.query(Attendance).filter_by(date=today).first()
-        if not attendance:
-            # No need to initialize as we'll create entries when users respond
-            pass
-
-        return {
-            "users": {user.user_id: {"name": user.name, "balance": user.balance, "daily_price": user.daily_price} 
-                     for user in session.query(User).all()},
-            "kassa": kassa.amount,
-            "daily_attendance": {
-                today: {
-                    "confirmed": [],
-                    "declined": [],
-                    "menu": {}
-                }
-            },
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        data = {
+            "users": {},
+            "daily_attendance": {},
             "attendance_history": {}
         }
-    finally:
-        session.close()
-
-def save_data(data):
-    session = get_db_session()
-    try:
-        # Update users
-        for user_id, user_data in data["users"].items():
-            user = session.query(User).filter_by(user_id=user_id).first()
-            if user:
-                user.balance = user_data["balance"]
-                user.daily_price = user_data.get("daily_price", 25000.0)
-            else:
-                user = User(
-                    user_id=user_id,
-                    name=user_data["name"],
-                    balance=user_data["balance"],
-                    daily_price=user_data.get("daily_price", 25000.0)
-                )
-                session.add(user)
-
-        # Update kassa
-        kassa = session.query(Kassa).first()
-        if kassa:
-            kassa.amount = data["kassa"]
-        else:
-            kassa = Kassa(amount=data["kassa"])
-            session.add(kassa)
-
-        # Update attendance
-        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-        if today in data["daily_attendance"]:
-            # Clear existing attendance for today
-            session.query(Attendance).filter_by(date=today).delete()
-            
-            # Add confirmed attendees
-            for user_id in data["daily_attendance"][today]["confirmed"]:
-                attendance = Attendance(
-                    date=today,
-                    user_id=user_id,
-                    status="confirmed",
-                    menu_choice=data["daily_attendance"][today]["menu"].get(user_id, "N/A")
-                )
-                session.add(attendance)
-            
-            # Add declined attendees
-            for user_id in data["daily_attendance"][today]["declined"]:
-                attendance = Attendance(
-                    date=today,
-                    user_id=user_id,
-                    status="declined"
-                )
-                session.add(attendance)
-
-        session.commit()
-    finally:
-        session.close()
+    if "kassa" not in data:
+        data["kassa"] = 0
+    return data
 
 def initialize_admins():
-    session = get_db_session()
-    try:
-        admins = [user.user_id for user in session.query(User).filter_by(is_admin=True).all()]
-        return {"admins": admins}
-    finally:
-        session.close()
+    if os.path.exists(ADMIN_FILE):
+        with open(ADMIN_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    else:
+        return {"admins": []}
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def save_admins(admins):
+    with open(ADMIN_FILE, "w", encoding="utf-8") as f:
+        json.dump(admins, f)
+
+def is_admin(user_id, admins):
+    return str(user_id) in admins["admins"]
 
 # ---------------------- Registration and Name Change ---------------------- #
 
@@ -228,17 +123,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             resize_keyboard=True,
         ),
     )
-    return CHOOSING
+    return PHONE
 
 async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.contact:
         phone_number = update.message.contact.phone_number
     else:
         await update.message.reply_text("Iltimos, \"Telefon raqamni yuborish\" tugmasini bosing.")
-        return CHOOSING
+        return PHONE
     context.user_data["phone"] = phone_number
     await update.message.reply_text("Rahmat! Endi to'liq ismingizni kiriting (Masalan: Abdurahmonov Sardor).")
-    return MENU_CHOICE
+    return NAME
 
 async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     full_name = update.message.text
@@ -254,7 +149,7 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     admins = initialize_admins()
     if not admins["admins"]:
         admins["admins"].append(user_id)
-        save_data(admins)
+        save_admins(admins)
     await update.message.reply_text(
         f"Ro'yxatdan o'tdingiz, {full_name}!\n\nQuyidagi imkoniyatlardan foydalanishingiz mumkin:",
         reply_markup=ReplyKeyboardMarkup(
@@ -271,7 +166,7 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # Allow users to change their name via /ism_ozgartirish
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Yangi ismingizni kiriting:")
-    return MENU_CHOICE
+    return NAME_CHANGE
 
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     new_name = update.message.text
@@ -414,16 +309,17 @@ async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if action == "yes":
             menu_kb = InlineKeyboardMarkup(
                 [
-                    [InlineKeyboardButton("1. Osh", callback_data=f"menu_1_{date}"),
-                     InlineKeyboardButton("2. Lag'mon", callback_data=f"menu_2_{date}")],
-                    [InlineKeyboardButton("3. Manti", callback_data=f"menu_3_{date}"),
+                    [InlineKeyboardButton("1. Qovurma Lag'mon", callback_data=f"menu_1_{date}"),
+                     InlineKeyboardButton("2. Teftel Jarkob", callback_data=f"menu_2_{date}")],
+                    [InlineKeyboardButton("3. Mastava", callback_data=f"menu_3_{date}"),
                      InlineKeyboardButton("4. Sho'rva", callback_data=f"menu_4_{date}")],
-                    [InlineKeyboardButton("5. Chuchvara", callback_data=f"menu_5_{date}"),
-                     InlineKeyboardButton("6. Qozon kabob", callback_data=f"menu_6_{date}")],
-                    [InlineKeyboardButton("7. Norin", callback_data=f"menu_7_{date}"),
-                     InlineKeyboardButton("8. Besh barmoq", callback_data=f"menu_8_{date}")],
-                    [InlineKeyboardButton("9. Mastava", callback_data=f"menu_9_{date}"),
-                     InlineKeyboardButton("10. Somsa", callback_data=f"menu_10_{date}")]
+                    [InlineKeyboardButton("5. Sokoro", callback_data=f"menu_5_{date}"),
+                     InlineKeyboardButton("6. Do'lma", callback_data=f"menu_6_{date}")],
+                    [InlineKeyboardButton("7. Teftel sho'rva", callback_data=f"menu_7_{date}"),
+                     InlineKeyboardButton("8. Suyuq lag'mon", callback_data=f"menu_8_{date}")],
+                    [InlineKeyboardButton("9. Osh", callback_data=f"menu_9_{date}"),
+                     InlineKeyboardButton("10. Qovurma Makron", callback_data=f"menu_10_{date}")],
+                    [InlineKeyboardButton("11. Xonim", callback_data=f"menu_11_{date}")]
                 ]
             )
             await query.edit_message_text("Iltimos, menyudan tanlang:", reply_markup=menu_kb)
@@ -485,7 +381,7 @@ async def start_balance_modification(update: Update, context: ContextTypes.DEFAU
         button = InlineKeyboardButton(f"{info['name']} ({uid})", callback_data=f"balance_mod_{uid}")
         kb.append([button])
     await update.message.reply_text("Iltimos, foydalanuvchini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
-    return CHOOSING
+    return ADMIN_BALANCE_SELECT_USER
 
 async def balance_mod_select_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -500,17 +396,17 @@ async def balance_mod_select_user_callback(update: Update, context: ContextTypes
         await query.edit_message_text("Iltimos, qo'shmoqchi bo'lgan summani kiriting (musbat raqam):")
     else:
         await query.edit_message_text("Iltimos, kamaytirmoqchi bo'lgan summani kiriting (musbat raqam):")
-    return CONFIRMING
+    return ADMIN_BALANCE_ENTER_AMOUNT
 
 async def balance_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = int(update.message.text)
         if amount < 0:
             await update.message.reply_text("Iltimos, musbat raqam kiriting.")
-            return CONFIRMING
+            return ADMIN_BALANCE_ENTER_AMOUNT
     except ValueError:
         await update.message.reply_text("Iltimos, to'g'ri raqam kiriting.")
-        return CONFIRMING
+        return ADMIN_BALANCE_ENTER_AMOUNT
     data = initialize_data()
     target_id = context.user_data.get("target_id")
     if not target_id or target_id not in data["users"]:
@@ -541,7 +437,7 @@ async def start_daily_price_modification(update: Update, context: ContextTypes.D
         button = InlineKeyboardButton(f"{info['name']} ({uid})", callback_data=f"price_mod_{uid}")
         kb.append([button])
     await update.message.reply_text("Iltimos, kunlik narxni o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
-    return CHOOSING
+    return ADMIN_DAILY_PRICE_SELECT_USER
 
 async def daily_price_mod_select_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -553,17 +449,17 @@ async def daily_price_mod_select_user_callback(update: Update, context: ContextT
     target_id = parts[2]
     context.user_data["price_target_id"] = target_id
     await query.edit_message_text("Iltimos, yangi kunlik narxni kiriting (soumlarda, masalan: 20000):")
-    return CONFIRMING
+    return ADMIN_DAILY_PRICE_ENTER_AMOUNT
 
 async def daily_price_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         price = int(update.message.text)
         if price < 0:
             await update.message.reply_text("Iltimos, musbat narx kiriting.")
-            return CONFIRMING
+            return ADMIN_DAILY_PRICE_ENTER_AMOUNT
     except ValueError:
         await update.message.reply_text("Iltimos, to'g'ri narx kiriting.")
-        return CONFIRMING
+        return ADMIN_DAILY_PRICE_ENTER_AMOUNT
     data = initialize_data()
     target_id = context.user_data.get("price_target_id")
     if not target_id or target_id not in data["users"]:
@@ -608,21 +504,56 @@ async def check_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Admin: View all registered users
 async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    admins = initialize_admins()
-    data = initialize_data()
-    if uid not in admins["admins"]:
-        await update.message.reply_text("Siz admin emassiz.")
-        return
-    if not data.get("users"):
-        await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
-        return
-    msg = "👥 Foydalanuvchilar ro'yxati:\n\n"
-    i = 1
-    for user_id, info in data["users"].items():
-        msg += f"{i}. ID: {user_id}, Ism: {info['name']}, Telefon: {info['phone']}\n"
-        i += 1
-    await update.message.reply_text(msg)
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        data = initialize_data()
+        
+        # Check if user is admin
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+        
+        # Check if there are any users
+        if not data.get("users"):
+            await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
+            return
+        
+        # Prepare user list message
+        msg = "👥 Foydalanuvchilar ro'yxati:\n\n"
+        i = 1
+        
+        # Sort users by name for better readability
+        sorted_users = sorted(data["users"].items(), key=lambda x: x[1].get("name", "").lower())
+        
+        for user_id, info in sorted_users:
+            # Safely get user information with default values
+            name = info.get("name", "Noma'lum")
+            phone = info.get("phone", "N/A")
+            balance = info.get("balance", 0)
+            daily_price = info.get("daily_price", 25000)
+            registration_date = info.get("registration_date", "N/A")
+            
+            # Format the user information
+            msg += f"{i}. {name}\n"
+            msg += f"   ID: {user_id}\n"
+            msg += f"   📱 Telefon: {phone}\n"
+            msg += f"   💰 Balans: {balance:,} so'm\n"
+            msg += f"   🍽️ Kunlik narx: {daily_price:,} so'm\n"
+            msg += f"   📅 Ro'yxatdan o'tgan: {registration_date}\n\n"
+            i += 1
+        
+        # Add summary information
+        total_users = len(data["users"])
+        total_balance = sum(user.get("balance", 0) for user in data["users"].values())
+        msg += f"📊 Jami: {total_users} ta foydalanuvchi\n"
+        msg += f"💰 Umumiy balans: {total_balance:,} so'm"
+        
+        await update.message.reply_text(msg)
+        
+    except Exception as e:
+        logger.error(f"Error in view_users: {str(e)}")
+        await update.message.reply_text("Foydalanuvchilar ro'yxatini ko'rsatishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
 
 # Admin: View today's attendance
 async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -730,7 +661,7 @@ async def make_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admins = initialize_admins()
     if not admins["admins"]:
         admins["admins"].append(uid)
-        save_data(admins)
+        save_admins(admins)
         await update.message.reply_text("Siz admin sifatida tayinlandingiz!")
         return
     if uid in admins["admins"]:
@@ -746,7 +677,7 @@ async def make_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Bu foydalanuvchi topilmadi.")
             return
         admins["admins"].append(new_admin)
-        save_data(admins)
+        save_admins(admins)
         try:
             await context.bot.send_message(chat_id=new_admin, text="Tabriklaymiz! Siz admin sifatida tayinlandingiz.")
         except Exception as e:
@@ -774,7 +705,7 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Siz yagona admin, o'zingizni o'chira olmaysiz.")
         return
     admins["admins"].remove(target)
-    save_data(admins)
+    save_admins(admins)
     try:
         await context.bot.send_message(chat_id=target, text="Sizning admin huquqlaringiz bekor qilindi.")
     except Exception as e:
@@ -855,28 +786,40 @@ async def remind_debtors(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     admins = initialize_admins()
+    
+    # Base help message for all users
     msg = "🍽️ MY TUSHLIK BOT BUYRUQLARI:\n\n"
     msg += "👤 FOYDALANUVCHI UCHUN:\n"
     msg += "/start - Botni ishga tushirish va ro'yxatdan o'tish\n"
-    msg += "/balans - Balansingizni ko'rish\n"
-    msg += "/qatnashish - Qatnashishlaringiz tarixi\n"
-    msg += "/❌ Tushlikni bekor qilish - (agar 9:59gacha)\n"
+    msg += "/balansim - Balansingizni ko'rish\n"
+    msg += "/qatnashishlarim - Qatnashishlaringiz tarixi\n"
     msg += "/ism_ozgartirish - Ismingizni o'zgartirish\n"
     msg += "/yordam - Yordam\n\n"
-    if is_admin(uid, admins):
+    
+    # Admin-specific commands
+    if uid in admins["admins"]:
         msg += "👑 ADMINISTRATOR UCHUN:\n"
+        msg += "Interaktiv tugmalar:\n"
+        msg += " • 👥 Foydalanuvchilar - Barcha foydalanuvchilar ro'yxati\n"
+        msg += " • ❌ Foydalanuvchini o'chirish - Foydalanuvchini o'chirish\n"
+        msg += " • 💵 Balans qo'shish - Foydalanuvchi balansini oshirish\n"
+        msg += " • 💸 Balans kamaytirish - Foydalanuvchi balansini kamaytirish\n"
+        msg += " • 📝 Kunlik narx - Foydalanuvchi kunlik narxini o'zgartirish\n"
+        msg += " • 📊 Bugungi qatnashuv - Bugungi tushlik qatnashuvchilari\n"
+        msg += " • 🔄 Balanslarni nollash - Barcha balanslarni nolga tushirish\n"
+        msg += " • 💰 Kassa - Kassa balansini ko'rish\n"
+        msg += " • ⬅️ Asosiy menyu - Asosiy menyuga qaytish\n"
+        msg += " • ❓ Yordam - Yordam\n\n"
+        msg += "Buyruqlar:\n"
         msg += "/admin_qoshish [id] - Yangi admin qo'shish\n"
         msg += "/admin_ochirish [id] - Adminni o'chirish\n"
-        msg += "Interaktiv tugmalar:\n"
-        msg += " • 💵 Balans qo'shish / 💸 Balans kamaytirish\n"
-        msg += " • 📝 Kunlik narx - Foydalanuvchining kunlik tushlik narxini sozlash\n"
         msg += "/balans_nol - Barcha balanslarni nolga tushirish\n"
-        msg += "/balanslar - Barcha foydalanuvchilarning balanslari\n"
         msg += "/bugun - Bugungi tushlik qatnashuvchilari\n"
         msg += "/eksport - Ma'lumotlarni eksport qilish\n"
         msg += "/eslatma - Kam balansli foydalanuvchilarga eslatma yuborish\n"
-        msg += "/kassa - 💰 Kassa balansini ko'rish\n"
+        msg += "/kassa - Kassa balansini ko'rish\n"
         msg += "/test_survey - (Test) Tushlik so'rovini yuborish\n"
+    
     await update.message.reply_text(msg)
 
 # ---------------------- Keyboard Functions ---------------------- #
@@ -886,7 +829,7 @@ async def show_admin_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE
         "Admin paneli:",
         reply_markup=ReplyKeyboardMarkup(
             [
-                ["👥 Foydalanuvchilar", "💰 Barcha balanslar"],
+                ["👥 Foydalanuvchilar", "❌ Foydalanuvchini o'chirish"],
                 ["💵 Balans qo'shish", "💸 Balans kamaytirish"],
                 ["📝 Kunlik narx", "📊 Bugungi qatnashuv"],
                 ["🔄 Balanslarni nollash", "💰 Kassa"],
@@ -926,6 +869,89 @@ async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def scheduled_low_balance_notification(context: ContextTypes.DEFAULT_TYPE):
     await send_low_balance_notifications(context)
 
+# ---------------------- Admin: Remove user ---------------------- #
+
+async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        data = initialize_data()
+        
+        # Check if user is admin
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+        
+        # Check if there are any users
+        if not data.get("users"):
+            await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
+            return
+        
+        # Create keyboard with user buttons
+        keyboard = []
+        for user_id, info in data["users"].items():
+            name = info.get("name", "Noma'lum")
+            button = InlineKeyboardButton(f"{name} (ID: {user_id})", callback_data=f"remove_user_{user_id}")
+            keyboard.append([button])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("O'chirmoqchi bo'lgan foydalanuvchini tanlang:", reply_markup=reply_markup)
+        
+    except Exception as e:
+        logger.error(f"Error in remove_user: {str(e)}")
+        await update.message.reply_text("Foydalanuvchini o'chirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+
+async def remove_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        # Check if user is admin
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        if uid not in admins["admins"]:
+            await query.edit_message_text("Siz admin emassiz.")
+            return
+        
+        # Get user ID from callback data
+        target_id = query.data.split("_")[2]
+        data = initialize_data()
+        
+        if target_id not in data["users"]:
+            await query.edit_message_text("Foydalanuvchi topilmadi.")
+            return
+        
+        # Get user info before removal
+        user_info = data["users"][target_id]
+        user_name = user_info.get("name", "Noma'lum")
+        
+        # Remove user from all relevant data
+        if target_id in data["users"]:
+            del data["users"][target_id]
+        
+        # Remove from daily attendance if present
+        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        if today in data["daily_attendance"]:
+            for status in ["confirmed", "declined", "pending"]:
+                if target_id in data["daily_attendance"][today][status]:
+                    data["daily_attendance"][today][status].remove(target_id)
+            if target_id in data["daily_attendance"][today].get("menu", {}):
+                del data["daily_attendance"][today]["menu"][target_id]
+        
+        # Remove from attendance history
+        for date in data["attendance_history"]:
+            if target_id in data["attendance_history"][date]["confirmed"]:
+                data["attendance_history"][date]["confirmed"].remove(target_id)
+            if target_id in data["attendance_history"][date].get("menu", {}):
+                del data["attendance_history"][date]["menu"][target_id]
+        
+        save_data(data)
+        await query.edit_message_text(f"✅ Foydalanuvchi {user_name} (ID: {target_id}) muvaffaqiyatli o'chirildi.")
+        
+    except Exception as e:
+        logger.error(f"Error in remove_user_callback: {str(e)}")
+        await query.edit_message_text("Foydalanuvchini o'chirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+
 # ---------------------- Main Function ---------------------- #
 
 def main():
@@ -941,8 +967,9 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            CHOOSING: [MessageHandler(filters.CONTACT, phone)],
-            MENU_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
+            PHONE: [MessageHandler(filters.CONTACT, phone)],
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
+            NAME_CHANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name_change)],
         },
         fallbacks=[CommandHandler('start', start)],
     )
@@ -952,8 +979,8 @@ def main():
     balance_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^(💵 Balans qo'shish|💸 Balans kamaytirish)$"), start_balance_modification)],
         states={
-            CHOOSING: [CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_")],
-            CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, balance_mod_enter_amount)]
+            ADMIN_BALANCE_SELECT_USER: [CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_")],
+            ADMIN_BALANCE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, balance_mod_enter_amount)]
         },
         fallbacks=[CommandHandler("cancel", cancel_balance_modification)]
     )
@@ -963,8 +990,8 @@ def main():
     daily_price_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^(📝 Kunlik narx)$"), start_daily_price_modification)],
         states={
-            CHOOSING: [CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_")],
-            CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_price_mod_enter_amount)]
+            ADMIN_DAILY_PRICE_SELECT_USER: [CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_")],
+            ADMIN_DAILY_PRICE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_price_mod_enter_amount)]
         },
         fallbacks=[CommandHandler("cancel", cancel_daily_price_modification)]
     )
@@ -1024,6 +1051,10 @@ def main():
         scheduled_low_balance_notification,
         time=datetime.time(12, 0, tzinfo=TASHKENT_TZ)
     )
+
+    # Add handler for user removal
+    application.add_handler(MessageHandler(filters.Regex("^❌ Foydalanuvchini o'chirish$"), remove_user))
+    application.add_handler(CallbackQueryHandler(remove_user_callback, pattern="^remove_user_"))
 
     # Start the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
