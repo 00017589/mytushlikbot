@@ -108,7 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             reply_markup=ReplyKeyboardMarkup(
                 [
                     ["💸 Balansim", "📊 Qatnashishlarim"],
-                    ["❌ Tushlikni bekor qilish"],
+                    ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
                     ["❓ Yordam"],
                 ],
                 resize_keyboard=True,
@@ -155,7 +155,7 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         reply_markup=ReplyKeyboardMarkup(
             [
                 ["💸 Balansim", "📊 Qatnashishlarim"],
-                ["❌ Tushlikni bekor qilish"],
+                ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
                 ["❓ Yordam"],
             ],
             resize_keyboard=True,
