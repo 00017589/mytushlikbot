@@ -165,15 +165,20 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # Allow users to change their name via button
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid = str(update.effective_user.id)
-    data = initialize_data()
-    
-    if uid not in data["users"]:
-        await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+    try:
+        uid = str(update.effective_user.id)
+        data = initialize_data()
+        
+        if uid not in data["users"]:
+            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+            return ConversationHandler.END
+        
+        await update.message.reply_text("Yangi ismingizni kiriting:")
+        return NAME_CHANGE
+    except Exception as e:
+        logger.error(f"Error in start_name_change: {str(e)}")
+        await update.message.reply_text("Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
         return ConversationHandler.END
-    
-    await update.message.reply_text("Yangi ismingizni kiriting:")
-    return NAME_CHANGE
 
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
@@ -870,17 +875,14 @@ async def show_admin_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 async def show_regular_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin_button = "👑 Admin panel" if is_admin(str(update.effective_user.id), initialize_admins()) else "❓ Yordam"
+    keyboard = [
+        ["💸 Balansim", "📊 Qatnashishlarim"],
+        ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
+        ["❓ Yordam"],
+    ]
     await update.message.reply_text(
-        "Asosiy menyu:",
-        reply_markup=ReplyKeyboardMarkup(
-            [
-                ["💸 Balansim", "📊 Qatnashishlarim"],
-                ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
-                [admin_button],
-            ],
-            resize_keyboard=True,
-        ),
+        "Quyidagi tugmalardan birini tanlang:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
     )
 
 async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
