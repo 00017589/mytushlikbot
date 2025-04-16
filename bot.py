@@ -163,23 +163,53 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return ConversationHandler.END
 
-# Allow users to change their name via /ism_ozgartirish
+# Allow users to change their name via button
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = str(update.effective_user.id)
+    data = initialize_data()
+    
+    if uid not in data["users"]:
+        await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+        return ConversationHandler.END
+    
     await update.message.reply_text("Yangi ismingizni kiriting:")
     return NAME_CHANGE
 
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    new_name = update.message.text
-    uid = str(update.effective_user.id)
-    data = initialize_data()
-    if uid not in data["users"]:
-        await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+    try:
+        new_name = update.message.text.strip()
+        if not new_name:
+            await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
+            return NAME_CHANGE
+            
+        uid = str(update.effective_user.id)
+        data = initialize_data()
+        
+        if uid not in data["users"]:
+            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+            return ConversationHandler.END
+            
+        old_name = data["users"][uid]["name"]
+        data["users"][uid]["name"] = new_name
+        save_data(data)
+        
+        await update.message.reply_text(
+            f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
+            reply_markup=ReplyKeyboardMarkup(
+                [
+                    ["💸 Balansim", "📊 Qatnashishlarim"],
+                    ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
+                    ["❓ Yordam"],
+                ],
+                resize_keyboard=True,
+            ),
+        )
         return ConversationHandler.END
-    old_name = data["users"][uid]["name"]
-    data["users"][uid]["name"] = new_name
-    save_data(data)
-    await update.message.reply_text(f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.")
-    return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Error in process_name_change: {str(e)}")
+        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+        return ConversationHandler.END
 
 # ---------------------- Attendance Survey and Summary ---------------------- #
 
@@ -846,7 +876,8 @@ async def show_regular_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=ReplyKeyboardMarkup(
             [
                 ["💸 Balansim", "📊 Qatnashishlarim"],
-                ["❌ Tushlikni bekor qilish", admin_button],
+                ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
+                [admin_button],
             ],
             resize_keyboard=True,
         ),
