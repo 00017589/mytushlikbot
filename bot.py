@@ -1002,11 +1002,23 @@ def main():
         states={
             PHONE: [MessageHandler(filters.CONTACT, phone)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
-            NAME_CHANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name_change)],
         },
         fallbacks=[CommandHandler('start', start)],
     )
     application.add_handler(conv_handler)
+
+    # Add name change conversation handler
+    name_change_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler('ism_ozgartirish', start_name_change),
+            MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change)
+        ],
+        states={
+            NAME_CHANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name_change)]
+        },
+        fallbacks=[CommandHandler('start', start)]
+    )
+    application.add_handler(name_change_conv)
 
     # Add admin balance modification conversation handler
     balance_conv = ConversationHandler(
@@ -1031,7 +1043,6 @@ def main():
     application.add_handler(daily_price_conv)
 
     # Add command handlers
-    application.add_handler(CommandHandler('ism_ozgartirish', start_name_change))
     application.add_handler(CommandHandler('balansim', check_balance))
     application.add_handler(CommandHandler('qatnashishlarim', check_attendance))
     application.add_handler(CommandHandler('yordam', help_command))
