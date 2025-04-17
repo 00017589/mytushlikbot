@@ -547,24 +547,39 @@ async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------- Admin Functions ---------------------- #
 # Admin Balance Modification
 async def start_balance_modification(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    action_text = update.message.text
-    if action_text == "💵 Balans qo'shish":
-        context.user_data["balance_action"] = "add"
-    elif action_text == "💸 Balans kamaytirish":
-        context.user_data["balance_action"] = "subtract"
-    else:
-        await update.message.reply_text("Noto'g'ri amal.")
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        action_text = update.message.text
+        if action_text == "💵 Balans qo'shish":
+            context.user_data["balance_action"] = "add"
+        elif action_text == "💸 Balans kamaytirish":
+            context.user_data["balance_action"] = "subtract"
+        else:
+            await update.message.reply_text("Noto'g'ri amal.")
+            return ConversationHandler.END
+            
+        data = initialize_data()
+        if not data["users"]:
+            await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
+            return ConversationHandler.END
+            
+        kb = []
+        for uid, info in data["users"].items():
+            button = InlineKeyboardButton(f"{info['name']} ({uid})", callback_data=f"balance_mod_{uid}")
+            kb.append([button])
+            
+        await update.message.reply_text("Iltimos, foydalanuvchini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+        return ADMIN_BALANCE_SELECT_USER
+    except Exception as e:
+        logger.error(f"Error in start_balance_modification: {str(e)}")
+        await update.message.reply_text("Balans o'zgartirishda xatolik yuz berdi.")
         return ConversationHandler.END
-    data = initialize_data()
-    if not data["users"]:
-        await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
-        return ConversationHandler.END
-    kb = []
-    for uid, info in data["users"].items():
-        button = InlineKeyboardButton(f"{info['name']} ({uid})", callback_data=f"balance_mod_{uid}")
-        kb.append([button])
-    await update.message.reply_text("Iltimos, foydalanuvchini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
-    return ADMIN_BALANCE_SELECT_USER
 
 async def balance_mod_select_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -611,16 +626,30 @@ async def cancel_balance_modification(update: Update, context: ContextTypes.DEFA
 
 # Admin Daily Price Adjustment
 async def start_daily_price_modification(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = initialize_data()
-    if not data["users"]:
-        await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        data = initialize_data()
+        if not data["users"]:
+            await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
+            return ConversationHandler.END
+            
+        kb = []
+        for uid, info in data["users"].items():
+            button = InlineKeyboardButton(f"{info['name']} ({uid})", callback_data=f"price_mod_{uid}")
+            kb.append([button])
+            
+        await update.message.reply_text("Iltimos, kunlik narxni o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+        return ADMIN_DAILY_PRICE_SELECT_USER
+    except Exception as e:
+        logger.error(f"Error in start_daily_price_modification: {str(e)}")
+        await update.message.reply_text("Kunlik narxni o'zgartirishda xatolik yuz berdi.")
         return ConversationHandler.END
-    kb = []
-    for uid, info in data["users"].items():
-        button = InlineKeyboardButton(f"{info['name']} ({uid})", callback_data=f"price_mod_{uid}")
-        kb.append([button])
-    await update.message.reply_text("Iltimos, kunlik narxni o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
-    return ADMIN_DAILY_PRICE_SELECT_USER
 
 async def daily_price_mod_select_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -690,12 +719,12 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = str(update.effective_user.id)
         admins = initialize_admins()
-        data = initialize_data()
         
         if uid not in admins["admins"]:
             await update.message.reply_text("Siz admin emassiz.")
             return
             
+        data = initialize_data()
         if not data["users"]:
             await update.message.reply_text("Hozircha foydalanuvchilar mavjud emas.")
             return
@@ -810,46 +839,57 @@ async def view_all_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Admin: View Kassa (with emoji)
 async def view_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    admins = initialize_admins()
-    data = initialize_data()
-    if uid not in admins["admins"]:
-        await update.message.reply_text("Siz admin emassiz.")
-        return
-    
-    # Calculate total balance from all users
-    total_balance = sum(user.get("balance", 0) for user in data["users"].values())
-    
-    # Format the message with emojis and proper formatting
-    await update.message.reply_text(
-        f"💰 Kassa: {total_balance:,} so'm\n\n"
-        f"📊 Jami foydalanuvchilar: {len(data['users'])} ta\n"
-        f"💵 Har bir foydalanuvchining balansi yig'indisi"
-    )
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        data = initialize_data()
+        
+        # Calculate total balance from all users
+        total_balance = sum(user.get("balance", 0) for user in data["users"].values())
+        
+        # Format the message with emojis and proper formatting
+        await update.message.reply_text(
+            f"💰 Kassa: {total_balance:,} so'm\n\n"
+            f"📊 Jami foydalanuvchilar: {len(data['users'])} ta\n"
+            f"💵 Har bir foydalanuvchining balansi yig'indisi"
+        )
+    except Exception as e:
+        logger.error(f"Error in view_kassa: {str(e)}")
+        await update.message.reply_text("Kassani ko'rsatishda xatolik yuz berdi.")
 
 # Admin: Reset balances
 async def reset_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    admins = initialize_admins()
-    data = initialize_data()
-    if uid not in admins["admins"]:
-        await update.message.reply_text("Siz admin emassiz.")
-        return
-    if context.args:
-        target_id = context.args[0]
-        if target_id not in data["users"]:
-            await update.message.reply_text("Bu foydalanuvchi topilmadi.")
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
             return
-        old_bal = data["users"][target_id]["balance"]
-        data["users"][target_id]["balance"] = 0
-        await save_data(data)
-        await update.message.reply_text(f"{data['users'][target_id]['name']} ning balansi {old_bal:,} so'mdan 0 so'mga tushirildi.")
-    else:
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Ha ✅", callback_data="reset_all_balances_confirm"),
-              InlineKeyboardButton("Yo'q ❌", callback_data="reset_all_balances_cancel")]]
-        )
-        await update.message.reply_text("Hamma foydalanuvchilarning balanslarini nolga tushurishni xohlaysizmi?", reply_markup=kb)
+            
+        if context.args:
+            target_id = context.args[0]
+            if target_id not in data["users"]:
+                await update.message.reply_text("Bu foydalanuvchi topilmadi.")
+                return
+            old_bal = data["users"][target_id]["balance"]
+            data["users"][target_id]["balance"] = 0
+            await save_data(data)
+            await update.message.reply_text(f"{data['users'][target_id]['name']} ning balansi {old_bal:,} so'mdan 0 so'mga tushirildi.")
+        else:
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Ha ✅", callback_data="reset_all_balances_confirm"),
+                  InlineKeyboardButton("Yo'q ❌", callback_data="reset_all_balances_cancel")]]
+            )
+            await update.message.reply_text("Hamma foydalanuvchilarning balanslarini nolga tushurishni xohlaysizmi?", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"Error in reset_balance: {str(e)}")
+        await update.message.reply_text("Balanslarni nolga tushirishda xatolik yuz berdi.")
 
 async def balance_reset_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1059,12 +1099,18 @@ async def show_regular_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    admins = initialize_admins()
-    if uid not in admins["admins"]:
-        await update.message.reply_text("Siz admin emassiz.")
-        return
-    await show_admin_keyboard(update, context)
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        await show_admin_keyboard(update, context)
+    except Exception as e:
+        logger.error(f"Error in admin_panel_handler: {str(e)}")
+        await update.message.reply_text("Admin paneliga kirishda xatolik yuz berdi.")
 
 # ---------------------- Testing Command ---------------------- #
 
