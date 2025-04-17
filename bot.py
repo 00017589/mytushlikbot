@@ -3,6 +3,9 @@ import json
 import os
 import datetime
 import pytz
+import shutil
+import asyncio
+import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
@@ -95,13 +98,62 @@ def initialize_admins():
     else:
         return {"admins": []}
 
+async def create_backup():
+    """Create backup of all data files and return paths of created backups"""
+    try:
+        # Create backups directory if it doesn't exist
+        if not os.path.exists("backups"):
+            os.makedirs("backups")
+            
+        # Get current timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Backup files
+        backup_files = []
+        files_to_backup = ["data.json", "admins.json", "lunch_bot.db"]
+        
+        for file_name in files_to_backup:
+            if os.path.exists(file_name):
+                backup_name = f"{file_name}_{timestamp}"
+                backup_path = os.path.join("backups", backup_name)
+                shutil.copy2(file_name, backup_path)
+                backup_files.append(backup_path)
+                logger.info(f"Created backup: {backup_path}")
+                
+                # Keep only last 5 backups
+                backup_pattern = os.path.join("backups", f"{file_name}_*")
+                backups = sorted(glob.glob(backup_pattern))
+                if len(backups) > 5:
+                    for old_backup in backups[:-5]:
+                        os.remove(old_backup)
+                        logger.info(f"Removed old backup: {old_backup}")
+        
+        return backup_files
+    except Exception as e:
+        logger.error(f"Backup creation failed: {e}")
+        raise
+
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    try:
+        # Create backup before saving
+        asyncio.run(create_backup())
+        
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        logger.error(f"Error saving data: {str(e)}")
+        raise
 
 def save_admins(admins):
-    with open(ADMIN_FILE, "w", encoding="utf-8") as f:
-        json.dump(admins, f)
+    try:
+        # Create backup before saving
+        asyncio.run(create_backup())
+        
+        with open(ADMIN_FILE, "w", encoding="utf-8") as f:
+            json.dump(admins, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        logger.error(f"Error saving admins: {str(e)}")
+        raise
 
 def is_admin(user_id, admins):
     return str(user_id) in admins["admins"]
@@ -1048,6 +1100,110 @@ async def remove_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Error in remove_user_callback: {str(e)}")
         await query.edit_message_text("Foydalanuvchini o'chirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
 
+# ---------------------- Add this function after other functions
+async def daily_backup(context: ContextTypes.DEFAULT_TYPE):
+    """Create a daily backup at midnight"""
+    try:
+        logger.info("Starting daily backup...")
+        await create_backup()
+        logger.info("Daily backup completed successfully")
+        
+        # Notify all admins about successful backup
+        admins = initialize_admins()
+        for admin_id in admins["admins"]:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text="✅ Kunlik zaxira nusxasi muvaffaqiyatli yaratildi"
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin_id}: {e}")
+    except Exception as e:
+        logger.error(f"Daily backup failed: {e}")
+        # Notify admins about backup failure
+        admins = initialize_admins()
+        for admin_id in admins["admins"]:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"❌ Kunlik zaxira nusxasi yaratishda xatolik yuz berdi: {e}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin_id}: {e}")
+
+# ---------------------- Add these functions after other functions
+async def verify_backup(backup_path: str) -> bool:
+    """Verify that a backup file is valid"""
+    try:
+        if backup_path.endswith('.json'):
+            with open(backup_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Basic validation
+                if not isinstance(data, dict):
+                    return False
+                if 'users' not in data:
+                    return False
+                return True
+        elif backup_path.endswith('.db'):
+            # Basic SQLite database validation
+            import sqlite3
+            conn = sqlite3.connect(backup_path)
+            cursor = conn.cursor()
+            # Check if tables exist
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = cursor.fetchall()
+            conn.close()
+            return len(tables) > 0
+        return False
+    except Exception as e:
+        logger.error(f"Backup verification failed: {e}")
+        return False
+
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the backup command with verification"""
+    uid = str(update.effective_user.id)
+    admins = initialize_admins()
+    
+    if uid not in admins["admins"]:
+        await update.message.reply_text("Siz admin emassiz.")
+        return
+    
+    await update.message.reply_text("Ma'lumotlarni zaxiralash boshlandi...")
+    
+    try:
+        # Create backup
+        backup_files = await create_backup()
+        
+        # Verify backups
+        verification_results = []
+        for backup_file in backup_files:
+            is_valid = await verify_backup(backup_file)
+            verification_results.append((backup_file, is_valid))
+        
+        # Prepare status message
+        status_message = "Zaxira nusxalari holati:\n\n"
+        for file_path, is_valid in verification_results:
+            file_name = os.path.basename(file_path)
+            status = "✅" if is_valid else "❌"
+            status_message += f"{status} {file_name}\n"
+        
+        await update.message.reply_text(status_message)
+        
+        # If any backup failed verification, notify admins
+        if not all(is_valid for _, is_valid in verification_results):
+            for admin_id in admins["admins"]:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text="⚠️ Diqqat: Ba'zi zaxira nusxalari noto'g'ri yaratildi!"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id}: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Backup command failed: {e}")
+        await update.message.reply_text(f"Zaxira nusxasi yaratishda xatolik yuz berdi: {e}")
+
 # ---------------------- Main Function ---------------------- #
 
 def main():
@@ -1120,6 +1276,7 @@ def main():
     application.add_handler(CommandHandler('eslatma', remind_debtors))
     application.add_handler(CommandHandler('kassa', view_kassa))
     application.add_handler(CommandHandler('test_survey', test_survey))
+    application.add_handler(CommandHandler('backup', backup_command))
 
     # Add message handlers for regular buttons
     application.add_handler(MessageHandler(filters.Regex("^💸 Balansim$"), check_balance))
@@ -1167,6 +1324,12 @@ def main():
     job_queue.run_daily(
         scheduled_low_balance_notification,
         time=datetime.time(12, 0, tzinfo=TASHKENT_TZ)
+    )
+
+    # Add daily backup job
+    job_queue.run_daily(
+        daily_backup,
+        time=datetime.time(0, 0, tzinfo=TASHKENT_TZ)  # Run at midnight
     )
 
     # Start the bot
