@@ -198,39 +198,35 @@ async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     context.user_data['phone'] = phone_number
     await update.message.reply_text(
-        "Endi ismingizni yuboring:",
+        "Iltimos, ismingizni kiriting:",
         reply_markup=ReplyKeyboardRemove()
     )
     return NAME
 
 async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    name = update.message.text.strip()
-    if len(name) < 2:
-        await update.message.reply_text("Iltimos, to'g'ri ism kiriting (kamida 2 ta harf)")
-        return NAME
-    
     user_id = str(update.effective_user.id)
-    phone = context.user_data.get('phone', '')
+    name = update.message.text.strip()
+    
+    if not name:
+        await update.message.reply_text("Iltimos, ismingizni kiriting:")
+        return NAME
     
     data = initialize_data()
     data["users"][user_id] = {
         "name": name,
-        "phone": phone,
+        "phone": context.user_data['phone'],
         "balance": 0,
         "daily_price": 0,
-        "registered_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "attendance": False
     }
     save_data(data)
     
-    context.user_data.clear()
-    
-    keyboard = show_admin_keyboard() if user_id in initialize_admins()["admins"] else show_regular_keyboard()
+    keyboard = show_regular_keyboard()
     await update.message.reply_text(
         f"Ro'yxatdan o'tish muvaffaqiyatli yakunlandi!\n"
         f"Assalomu alaykum, {name}!",
         reply_markup=keyboard
     )
-    
     return ConversationHandler.END
 
 # Allow users to change their name via button
@@ -1307,15 +1303,12 @@ def main():
 
     # Add registration conversation handler
     registration_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[CommandHandler("start", start)],
         states={
-            PHONE: [
-                MessageHandler(filters.CONTACT, phone),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, phone)
-            ],
+            PHONE: [MessageHandler(filters.CONTACT | filters.TEXT & ~filters.COMMAND, phone)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)]
         },
-        fallbacks=[CommandHandler('cancel', cancel_registration)],
+        fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True
     )
     application.add_handler(registration_handler)
