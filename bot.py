@@ -701,14 +701,26 @@ async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text("Bugun tushlik qatnashuvchilar yo'q.")
             return
             
-        message = f"🍽️ {today} - Bugungi tushlik qatnashuvchilari:\n\n"
+        # Calculate most popular food
+        food_stats = {}
+        menu_choices = data["daily_attendance"][today].get("menu", {})
+        for user_id, dish in menu_choices.items():
+            if user_id in confirmed:
+                food_stats[dish] = food_stats.get(dish, 0) + 1
         
+        # Get most popular food
+        most_popular = max(food_stats.items(), key=lambda x: x[1]) if food_stats else ("N/A", 0)
+        popular_dish_name = MENU_OPTIONS.get(most_popular[0], "N/A") if most_popular[0] != "N/A" else "N/A"
+        
+        message = f"🍽️ {today} - Bugungi Tushlik:\n\n"
+        message += f"📊 Eng ko'p tanlangan ovqat: {popular_dish_name} ({most_popular[1]} ta)\n\n"
+        message += "👥 Qatnashuvchilar:\n"
+        
+        # Show brief list of attendees
         for i, user_id in enumerate(confirmed, 1):
             if user_id in data["users"]:
                 name = data["users"][user_id]["name"]
-                dish = data["daily_attendance"][today].get("menu", {}).get(user_id, "N/A")
-                dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
-                message += f"{i}. {name} - {dish_name}\n"
+                message += f"{i}. {name}\n"
         
         # Add lunch status based on time
         if current_time.hour >= 14:
