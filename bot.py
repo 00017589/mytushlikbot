@@ -253,14 +253,27 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
         data = initialize_data()
         updated_count = 0
         
+        # Update all users' daily prices
         for user_id, user_data in data["users"].items():
             if "daily_price" not in user_data or user_data["daily_price"] == 0:
                 user_data["daily_price"] = 25000
                 updated_count += 1
-                
+                logger.info(f"Updated daily price for user {user_id} to 25000")
+        
+        # Save the changes
         if updated_count > 0:
             await save_data(data)
             await update.message.reply_text(f"✅ {updated_count} ta foydalanuvchining kunlik narxi 25,000 so'mga o'zgartirildi.")
+            
+            # Verify the changes
+            data = initialize_data()  # Reload data to verify
+            zero_price_count = sum(1 for user in data["users"].values() 
+                                 if "daily_price" not in user or user["daily_price"] == 0)
+            
+            if zero_price_count > 0:
+                await update.message.reply_text(f"⚠️ Diqqat: {zero_price_count} ta foydalanuvchining kunlik narxi hali ham 0 so'm!")
+            else:
+                await update.message.reply_text("✅ Barcha foydalanuvchilarning kunlik narxi 25,000 so'mga o'zgartirildi.")
         else:
             await update.message.reply_text("Barcha foydalanuvchilarning kunlik narxi allaqachon 25,000 so'm.")
             
