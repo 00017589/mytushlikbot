@@ -544,51 +544,87 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admins = initialize_admins()
         data = initialize_data()
         
-        # Check if user is admin
         if uid not in admins["admins"]:
             await update.message.reply_text("Siz admin emassiz.")
             return
-        
-        # Check if there are any users
-        if not data.get("users"):
-            await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
-            return
-        
-        # Prepare user list message
-        msg = "👥 Foydalanuvchilar ro'yxati:\n\n"
-        i = 1
-        
-        # Sort users by name for better readability
-        sorted_users = sorted(data["users"].items(), key=lambda x: x[1].get("name", "").lower())
-        
-        for user_id, info in sorted_users:
-            # Safely get user information with default values
-            name = info.get("name", "Noma'lum")
-            phone = info.get("phone", "N/A")
-            balance = info.get("balance", 0)
-            daily_price = info.get("daily_price", 25000)
-            registration_date = info.get("registration_date", "N/A")
             
-            # Format the user information
-            msg += f"{i}. {name}\n"
-            msg += f"   ID: {user_id}\n"
-            msg += f"   📱 Telefon: {phone}\n"
-            msg += f"   💰 Balans: {balance:,} so'm\n"
-            msg += f"   🍽️ Kunlik narx: {daily_price:,} so'm\n"
-            msg += f"   📅 Ro'yxatdan o'tgan: {registration_date}\n\n"
-            i += 1
+        if not data["users"]:
+            await update.message.reply_text("Hozircha foydalanuvchilar mavjud emas.")
+            return
+            
+        # Get current page from context or set to 1
+        current_page = context.user_data.get('user_list_page', 1)
         
-        # Add summary information
+        # Sort users by name
+        sorted_users = sorted(data["users"].items(), key=lambda x: x[1]["name"])
+        
+        # Calculate total pages
+        users_per_page = 3
+        total_pages = (len(sorted_users) + users_per_page - 1) // users_per_page
+        
+        # Ensure current page is valid
+        current_page = max(1, min(current_page, total_pages))
+        
+        # Get users for current page
+        start_idx = (current_page - 1) * users_per_page
+        end_idx = start_idx + users_per_page
+        page_users = sorted_users[start_idx:end_idx]
+        
+        # Build message
+        message = f"📋 Foydalanuvchilar ro'yxati (Sahifa {current_page}/{total_pages}):\n\n"
+        
+        for user_id, user_data in page_users:
+            name = user_data.get("name", "N/A")
+            phone = user_data.get("phone", "N/A")
+            balance = user_data.get("balance", 0)
+            daily_price = user_data.get("daily_price", 0)
+            reg_date = user_data.get("registration_date", "N/A")
+            
+            message += (
+                f"👤 {name}\n"
+                f"🆔 ID: {user_id}\n"
+                f"📱 Tel: {phone}\n"
+                f"💰 Balans: {balance:,} so'm\n"
+                f"💵 Kunlik narx: {daily_price:,} so'm\n"
+                f"📅 Ro'yxatdan o'tgan: {reg_date}\n"
+                f"────────────────────\n"
+            )
+        
+        # Add navigation buttons
+        keyboard = []
+        if current_page > 1:
+            keyboard.append([InlineKeyboardButton("⬅️ Oldingi", callback_data=f"user_list_{current_page-1}")])
+        if current_page < total_pages:
+            keyboard.append([InlineKeyboardButton("Keyingi ➡️", callback_data=f"user_list_{current_page+1}")])
+        
+        # Add summary at the end
         total_users = len(data["users"])
         total_balance = sum(user.get("balance", 0) for user in data["users"].values())
-        msg += f"📊 Jami: {total_users} ta foydalanuvchi\n"
-        msg += f"💰 Umumiy balans: {total_balance:,} so'm"
+        message += f"\n📊 Jami foydalanuvchilar: {total_users} ta\n"
+        message += f"💰 Jami balans: {total_balance:,} so'm"
         
-        await update.message.reply_text(msg)
+        # Send message with navigation buttons
+        await update.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
+        )
         
     except Exception as e:
         logger.error(f"Error in view_users: {str(e)}")
-        await update.message.reply_text("Foydalanuvchilar ro'yxatini ko'rsatishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+        await update.message.reply_text("Foydalanuvchilar ro'yxatini ko'rsatishda xatolik yuz berdi.")
+
+async def user_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract page number from callback data
+    page = int(query.data.split('_')[-1])
+    
+    # Store current page in context
+    context.user_data['user_list_page'] = page
+    
+    # Call view_users with the new page
+    await view_users(update, context)
 
 # Admin: View today's attendance
 async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -643,9 +679,16 @@ async def view_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in admins["admins"]:
         await update.message.reply_text("Siz admin emassiz.")
         return
-    bal = data.get("kassa", 0)
-    sign = "+" if bal >= 0 else ""
-    await update.message.reply_text(f"💰 Kassa: {sign}{bal:,} so'm")
+    
+    # Calculate total balance from all users
+    total_balance = sum(user.get("balance", 0) for user in data["users"].values())
+    
+    # Format the message with emojis and proper formatting
+    await update.message.reply_text(
+        f"💰 Kassa: {total_balance:,} so'm\n\n"
+        f"📊 Jami foydalanuvchilar: {len(data['users'])} ta\n"
+        f"💵 Har bir foydalanuvchining balansi yig'indisi"
+    )
 
 # Admin: Reset balances
 async def reset_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1058,15 +1101,21 @@ def main():
     application.add_handler(CommandHandler('kassa', view_kassa))
     application.add_handler(CommandHandler('test_survey', test_survey))
 
-    # Add message handlers for buttons
+    # Add message handlers for regular buttons
     application.add_handler(MessageHandler(filters.Regex("^💸 Balansim$"), check_balance))
     application.add_handler(MessageHandler(filters.Regex("^📊 Qatnashishlarim$"), check_attendance))
     application.add_handler(MessageHandler(filters.Regex("^❌ Tushlikni bekor qilish$"), cancel_lunch))
     application.add_handler(MessageHandler(filters.Regex("^❓ Yordam$"), help_command))
     application.add_handler(MessageHandler(filters.Regex("^👑 Admin panel$"), admin_panel_handler))
+    application.add_handler(MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change))
+
+    # Add message handlers for admin buttons
     application.add_handler(MessageHandler(filters.Regex("^👥 Foydalanuvchilar$"), view_users))
-    application.add_handler(MessageHandler(filters.Regex("^💰 Barcha balanslar$"), view_all_balances))
-    application.add_handler(MessageHandler(filters.Regex("^📊 Bugungi qatnashuv$"), view_attendance_today_admin))
+    application.add_handler(MessageHandler(filters.Regex("^❌ Foydalanuvchini o'chirish$"), remove_user))
+    application.add_handler(MessageHandler(filters.Regex("^💵 Balans qo'shish$"), start_balance_modification))
+    application.add_handler(MessageHandler(filters.Regex("^💸 Balans kamaytirish$"), start_balance_modification))
+    application.add_handler(MessageHandler(filters.Regex("^📝 Kunlik narx$"), start_daily_price_modification))
+    application.add_handler(MessageHandler(filters.Regex("^�� Bugungi qatnashuv$"), view_attendance_today_admin))
     application.add_handler(MessageHandler(filters.Regex("^🔄 Balanslarni nollash$"), reset_balance))
     application.add_handler(MessageHandler(filters.Regex("^💰 Kassa$"), view_kassa))
     application.add_handler(MessageHandler(filters.Regex("^⬅️ Asosiy menyu$"), show_regular_keyboard))
@@ -1074,6 +1123,10 @@ def main():
     # Add callback query handlers
     application.add_handler(CallbackQueryHandler(attendance_callback, pattern="^(attendance_|menu_)"))
     application.add_handler(CallbackQueryHandler(balance_reset_callback, pattern="^reset_all_balances_"))
+    application.add_handler(CallbackQueryHandler(remove_user_callback, pattern="^remove_user_"))
+    application.add_handler(CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_"))
+    application.add_handler(CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_"))
+    application.add_handler(CallbackQueryHandler(user_list_callback, pattern="^user_list_"))
 
     # Schedule daily jobs
     job_queue = application.job_queue
@@ -1095,10 +1148,6 @@ def main():
         scheduled_low_balance_notification,
         time=datetime.time(12, 0, tzinfo=TASHKENT_TZ)
     )
-
-    # Add handler for user removal
-    application.add_handler(MessageHandler(filters.Regex("^❌ Foydalanuvchini o'chirish$"), remove_user))
-    application.add_handler(CallbackQueryHandler(remove_user_callback, pattern="^remove_user_"))
 
     # Start the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
