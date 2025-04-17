@@ -790,7 +790,7 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name = user_data.get("name", "N/A")
             phone = user_data.get("phone", "N/A")
             balance = user_data.get("balance", 0)
-            daily_price = user_data.get("daily_price", 0)
+            daily_price = user_data.get("daily_price", 25000)  # Default to 25000 if not set
             
             message += (
                 f"{i}. 👤 {name}\n"
@@ -804,8 +804,11 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add summary at the end
         total_users = len(data["users"])
         total_balance = sum(user.get("balance", 0) for user in data["users"].values())
+        total_daily_price = sum(user.get("daily_price", 25000) for user in data["users"].values())
+        
         message += f"\n📊 Jami foydalanuvchilar: {total_users} ta\n"
-        message += f"💰 Jami balans: {total_balance:,} so'm"
+        message += f"💰 Jami balans: {total_balance:,} so'm\n"
+        message += f"💵 Jami kunlik narxlar yig'indisi: {total_daily_price:,} so'm"
         
         # Send message
         await update.message.reply_text(message)
