@@ -1543,7 +1543,7 @@ async def start_name_change_admin(update: Update, context: ContextTypes.DEFAULT_
         keyboard = []
         for user_id, info in data["users"].items():
             name = info.get("name", "Noma'lum")
-            button = InlineKeyboardButton(f"{name} (ID: {user_id})", callback_data=f"change_name_{user_id}")
+            button = InlineKeyboardButton(f"{name} (ID: {user_id})", callback_data=f"admin_change_name_{user_id}")
             keyboard.append([button])
             
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1553,8 +1553,8 @@ async def start_name_change_admin(update: Update, context: ContextTypes.DEFAULT_
         logger.error(f"Error in start_name_change_admin: {str(e)}")
         await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
 
-async def name_change_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the name change callback"""
+async def admin_name_change_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the admin name change callback"""
     try:
         query = update.callback_query
         await query.answer()
@@ -1567,7 +1567,7 @@ async def name_change_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         
         # Get user ID from callback data
-        target_id = query.data.split("_")[2]
+        target_id = query.data.split("_")[3]
         data = initialize_data()
         
         if target_id not in data["users"]:
@@ -1575,23 +1575,23 @@ async def name_change_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         
         # Store target ID in context for the next step
-        context.user_data["name_change_target"] = target_id
+        context.user_data["admin_name_change_target"] = target_id
         await query.edit_message_text("Yangi ismni kiriting:")
-        return "WAITING_FOR_NEW_NAME"
+        return "ADMIN_WAITING_FOR_NEW_NAME"
         
     except Exception as e:
-        logger.error(f"Error in name_change_callback: {str(e)}")
+        logger.error(f"Error in admin_name_change_callback: {str(e)}")
         await query.edit_message_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
 
-async def process_name_change_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process the new name for the selected user"""
+async def process_admin_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process the new name for the selected user in admin mode"""
     try:
         new_name = update.message.text.strip()
         if not new_name:
             await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
-            return "WAITING_FOR_NEW_NAME"
+            return "ADMIN_WAITING_FOR_NEW_NAME"
             
-        target_id = context.user_data.get("name_change_target")
+        target_id = context.user_data.get("admin_name_change_target")
         if not target_id:
             await update.message.reply_text("Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
             return ConversationHandler.END
@@ -1648,7 +1648,7 @@ async def process_name_change_admin(update: Update, context: ContextTypes.DEFAUL
         return ConversationHandler.END
         
     except Exception as e:
-        logger.error(f"Error in process_name_change_admin: {str(e)}")
+        logger.error(f"Error in process_admin_name_change: {str(e)}")
         await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
         return ConversationHandler.END
 
@@ -1735,7 +1735,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^❌ Tushlikni bekor qilish$"), cancel_lunch))
     application.add_handler(MessageHandler(filters.Regex("^❓ Yordam$"), help_command))
     application.add_handler(MessageHandler(filters.Regex("^👑 Admin panel$"), admin_panel_handler))
-    application.add_handler(MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change))
+    application.add_handler(MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change_admin))
 
     # Add message handlers for admin buttons
     application.add_handler(MessageHandler(filters.Regex("^👥 Foydalanuvchilar$"), view_users))
@@ -1789,14 +1789,14 @@ def main():
             MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change_admin)
         ],
         states={
-            "WAITING_FOR_NEW_NAME": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name_change_admin)]
+            "ADMIN_WAITING_FOR_NEW_NAME": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_name_change)]
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
     )
     application.add_handler(name_change_admin_conv)
     
     # Add callback query handler for name change
-    application.add_handler(CallbackQueryHandler(name_change_callback, pattern="^change_name_"))
+    application.add_handler(CallbackQueryHandler(admin_name_change_callback, pattern="^admin_change_name_"))
 
     # Start the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
