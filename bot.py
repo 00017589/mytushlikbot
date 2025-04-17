@@ -87,6 +87,12 @@ def initialize_admins():
             return json.load(f)
     return {"admins": []}
 
+def set_daily_price_for_all_users(data, price=25000):
+    """Set daily price for all users to the specified amount"""
+    for user_id, user_data in data["users"].items():
+        user_data["daily_price"] = price
+    return data
+
 async def create_backup():
     try:
         if not os.path.exists("backups"):
@@ -217,9 +223,10 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             
         old_name = data["users"][uid]["name"]
         data["users"][uid]["name"] = name_text
-        # Set default daily price to 25000 if not set
-        if "daily_price" not in data["users"][uid] or data["users"][uid]["daily_price"] == 0:
-            data["users"][uid]["daily_price"] = 25000
+        
+        # Set daily price for all users
+        data = set_daily_price_for_all_users(data)
+        
         await save_data(data)
         
         await update.message.reply_text(
@@ -241,7 +248,7 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
 async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Update all users' daily prices to 25000 if they are 0"""
+    """Update all users' daily prices to 25000"""
     try:
         uid = str(update.effective_user.id)
         admins = initialize_admins()
@@ -251,31 +258,22 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
             return
             
         data = initialize_data()
-        updated_count = 0
         
         # Update all users' daily prices
-        for user_id, user_data in data["users"].items():
-            if "daily_price" not in user_data or user_data["daily_price"] == 0:
-                user_data["daily_price"] = 25000
-                updated_count += 1
-                logger.info(f"Updated daily price for user {user_id} to 25000")
+        data = set_daily_price_for_all_users(data)
         
         # Save the changes
-        if updated_count > 0:
-            await save_data(data)
-            await update.message.reply_text(f"✅ {updated_count} ta foydalanuvchining kunlik narxi 25,000 so'mga o'zgartirildi.")
-            
-            # Verify the changes
-            data = initialize_data()  # Reload data to verify
-            zero_price_count = sum(1 for user in data["users"].values() 
-                                 if "daily_price" not in user or user["daily_price"] == 0)
-            
-            if zero_price_count > 0:
-                await update.message.reply_text(f"⚠️ Diqqat: {zero_price_count} ta foydalanuvchining kunlik narxi hali ham 0 so'm!")
-            else:
-                await update.message.reply_text("✅ Barcha foydalanuvchilarning kunlik narxi 25,000 so'mga o'zgartirildi.")
+        await save_data(data)
+        
+        # Verify the changes
+        data = initialize_data()  # Reload data to verify
+        zero_price_count = sum(1 for user in data["users"].values() 
+                             if "daily_price" not in user or user["daily_price"] == 0)
+        
+        if zero_price_count > 0:
+            await update.message.reply_text(f"⚠️ Diqqat: {zero_price_count} ta foydalanuvchining kunlik narxi hali ham 0 so'm!")
         else:
-            await update.message.reply_text("Barcha foydalanuvchilarning kunlik narxi allaqachon 25,000 so'm.")
+            await update.message.reply_text("✅ Barcha foydalanuvchilarning kunlik narxi 25,000 so'mga o'zgartirildi.")
             
     except Exception as e:
         logger.error(f"Error in update_all_daily_prices: {str(e)}")
