@@ -212,7 +212,7 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "name": name_text,
         "phone": context.user_data['phone'],
         "balance": 0,
-        "daily_price": 0,
+        "daily_price": 25000,
         "attendance": False
     }
     await save_data(data)
@@ -368,10 +368,14 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
         for dish, count in sorted_foods:
             dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
             admin_summary += f"• {dish_name}: {count} ta\n"
+        
+        # Add total amount collected
+        total_amount = len(confirmed) * 25000
+        admin_summary += f"\n💰 Jami yig'ilgan summa: {total_amount:,} so'm"
     else:
         admin_summary += "❌ Bugun tushlik qatnashuvchilar yo'q."
 
-    # Prepare user summary
+    # Prepare user summary and deduct balances
     for user_id in confirmed:
         if user_id in data["users"]:
             name = data["users"][user_id]["name"]
@@ -380,6 +384,15 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
             user_summary = f"🍽️ {today} - Tushlik qatnashuvchisi:\n\n"
             user_summary += f"• Siz: {name}\n"
             user_summary += f"• Tanlangan ovqat: {dish_name}\n"
+            
+            # Deduct balance and update kassa
+            old_balance = data["users"][user_id]["balance"]
+            data["users"][user_id]["balance"] -= 25000
+            data["kassa"] += 25000
+            
+            user_summary += f"• Hisobdan yechilgan summa: 25,000 so'm\n"
+            user_summary += f"• Yangi balans: {data['users'][user_id]['balance']:,} so'm"
+            
             try:
                 await context.bot.send_message(chat_id=user_id, text=user_summary)
             except Exception as e:
@@ -392,14 +405,7 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to send summary to admin {admin_id}: {e}")
 
-    # Update balances and kassa
-    for user_id in confirmed:
-        if user_id in data["users"]:
-            price = data["users"][user_id].get("daily_price", 25000)
-            data["users"][user_id]["balance"] -= price
-            data["kassa"] += price
-
-    # Save attendance history
+    # Save attendance history and updated data
     if today not in data["attendance_history"]:
         data["attendance_history"][today] = {
             "confirmed": confirmed.copy(),
@@ -424,6 +430,10 @@ async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             if uid in lst:
                 lst.remove(uid)
         if action == "yes":
+            # Check if user has enough balance
+            if uid in data["users"] and data["users"][uid]["balance"] < 25000:
+                await query.edit_message_text("Sizning balansingiz yetarli emas. Iltimos, balansingizni to'ldiring.")
+                return
             menu_kb = InlineKeyboardMarkup(
                 [
                     [InlineKeyboardButton("1. Qovurma Lag'mon", callback_data=f"menu_1_{date}"),
@@ -640,21 +650,19 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Build message
         message = "📋 Foydalanuvchilar ro'yxati:\n\n"
         
-        for user_id, user_data in sorted_users:
+        for i, (user_id, user_data) in enumerate(sorted_users, 1):
             name = user_data.get("name", "N/A")
             phone = user_data.get("phone", "N/A")
             balance = user_data.get("balance", 0)
             daily_price = user_data.get("daily_price", 0)
-            reg_date = user_data.get("registration_date", "N/A")
             
             message += (
-                f"👤 {name}\n"
-                f"🆔 ID: {user_id}\n"
-                f"📱 Tel: {phone}\n"
-                f"💰 Balans: {balance:,} so'm\n"
-                f"💵 Kunlik narx: {daily_price:,} so'm\n"
-                f"📅 Ro'yxatdan o'tgan: {reg_date}\n"
-                f"────────────────────\n"
+                f"{i}. 👤 {name}\n"
+                f"   🆔 ID: {user_id}\n"
+                f"   📱 Tel: {phone}\n"
+                f"   💰 Balans: {balance:,} so'm\n"
+                f"   💵 Kunlik narx: {daily_price:,} so'm\n"
+                f"   ────────────────────\n"
             )
         
         # Add summary at the end
@@ -1373,10 +1381,10 @@ def main():
         time=datetime.time(7, 0, tzinfo=TASHKENT_TZ)
     )
     
-    # Summary at 9:00 AM Tashkent time
+    # Summary at 10:00 AM Tashkent time
     job_queue.run_daily(
         send_attendance_summary,
-        time=datetime.time(9, 0, tzinfo=TASHKENT_TZ)
+        time=datetime.time(10, 0, tzinfo=TASHKENT_TZ)
     )
 
     # Low balance notification at 12:00 PM Tashkent time
