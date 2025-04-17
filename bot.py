@@ -1204,6 +1204,88 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Backup command failed: {e}")
         await update.message.reply_text(f"Zaxira nusxasi yaratishda xatolik yuz berdi: {e}")
 
+# ---------------------- Add this function before the main function
+async def notify_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a notification to all users to restart the bot"""
+    uid = str(update.effective_user.id)
+    admins = initialize_admins()
+    
+    if uid not in admins["admins"]:
+        await update.message.reply_text("Siz admin emassiz.")
+        return
+    
+    # Get all users from data
+    data = initialize_data()
+    users = data.get("users", {})
+    
+    if not users:
+        await update.message.reply_text("Foydalanuvchilar topilmadi.")
+        return
+    
+    # Ask for confirmation
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Ha", callback_data="confirm_notify_all"),
+            InlineKeyboardButton("❌ Yo'q", callback_data="cancel_notify_all")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"⚠️ Diqqat!\n"
+        f"Barcha {len(users)} ta foydalanuvchiga xabar yuborishni tasdiqlaysizmi?\n"
+        f"Bu xabar ularga botni qayta ishga tushirish va ro'yxatdan o'tishni so'raydi.",
+        reply_markup=reply_markup
+    )
+
+async def notify_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the notification confirmation callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "cancel_notify_all":
+        await query.edit_message_text("Bildirishnoma yuborish bekor qilindi.")
+        return
+    
+    # Get all users
+    data = initialize_data()
+    users = data.get("users", {})
+    
+    # Prepare the message
+    message = (
+        "⚠️ Muhim xabar!\n\n"
+        "Bot yangilandi va sizning ma'lumotlaringiz yangilanishi kerak.\n\n"
+        "Iltimos, quyidagi amallarni bajaring:\n"
+        "1. /start buyrug'ini yuboring\n"
+        "2. Yangi ro'yxatdan o'ting\n"
+        "3. Telefon raqamingizni qayta kiritishingiz mumkin\n\n"
+        "Bu jarayon bir necha soniyani oladi. Rahmat!"
+    )
+    
+    # Send to all users
+    success_count = 0
+    failed_count = 0
+    
+    for user_id in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=message
+            )
+            success_count += 1
+        except Exception as e:
+            logger.error(f"Failed to send message to user {user_id}: {e}")
+            failed_count += 1
+    
+    # Send status to admin
+    status_message = (
+        f"Bildirishnoma yuborish yakunlandi:\n"
+        f"✅ Muvaffaqiyatli: {success_count}\n"
+        f"❌ Muvaffaqiyatsiz: {failed_count}"
+    )
+    
+    await query.edit_message_text(status_message)
+
 # ---------------------- Main Function ---------------------- #
 
 def main():
@@ -1277,6 +1359,7 @@ def main():
     application.add_handler(CommandHandler('kassa', view_kassa))
     application.add_handler(CommandHandler('test_survey', test_survey))
     application.add_handler(CommandHandler('backup', backup_command))
+    application.add_handler(CommandHandler('notify_all', notify_all_users))
 
     # Add message handlers for regular buttons
     application.add_handler(MessageHandler(filters.Regex("^💸 Balansim$"), check_balance))
@@ -1304,6 +1387,7 @@ def main():
     application.add_handler(CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_"))
     application.add_handler(CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_"))
     application.add_handler(CallbackQueryHandler(user_list_callback, pattern="^user_list_"))
+    application.add_handler(CallbackQueryHandler(notify_all_callback, pattern="^(confirm|cancel)_notify_all$"))
 
     # Schedule daily jobs
     job_queue = application.job_queue
