@@ -690,6 +690,7 @@ async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFA
             return
             
         today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        current_time = datetime.datetime.now(TASHKENT_TZ)
         
         if today not in data["daily_attendance"]:
             await update.message.reply_text("Bugun tushlik ma'lumotlari topilmadi.")
@@ -708,6 +709,12 @@ async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFA
                 dish = data["daily_attendance"][today].get("menu", {}).get(user_id, "N/A")
                 dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
                 message += f"{i}. {name} - {dish_name}\n"
+        
+        # Add lunch status based on time
+        if current_time.hour >= 14:
+            message += "\n⚠️ Tushlik yakunlandi"
+        else:
+            message += "\n⏳ Tushlik davom etmoqda"
         
         await update.message.reply_text(message)
         
