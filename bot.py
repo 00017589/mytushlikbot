@@ -6,7 +6,7 @@ import pytz
 import shutil
 import asyncio
 import glob
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
 
 # Conversation states for registration and name change
-PHONE, NAME = range(2)
+PHONE = 0
+NAME = 1
 NAME_CHANGE = 200
 
 # Conversation states for admin balance modification (modify user's balance)
@@ -163,27 +164,26 @@ def is_admin(user_id, admins):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     data = initialize_data()
+    admins = initialize_admins()
+    
     if user_id in data["users"]:
-        user_name = data["users"][user_id]["name"].split()[0]
+        user = data["users"][user_id]
+        keyboard = show_admin_keyboard() if user_id in admins["admins"] else show_regular_keyboard()
         await update.message.reply_text(
-            f"👋 Salom, {user_name}!\n\nMy Tushlik botga qaytganingizdan xursandmiz! Quyidagi tugmalardan foydalanishingiz mumkin:",
-            reply_markup=ReplyKeyboardMarkup(
-                [
-                    ["💸 Balansim", "📊 Qatnashishlarim"],
-                    ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
-                    ["❓ Yordam"],
-                ],
-                resize_keyboard=True,
-            ),
+            f"Assalomu alaykum, {user['name']}!\n"
+            f"Botga xush kelibsiz!",
+            reply_markup=keyboard
         )
         return ConversationHandler.END
+    
     await update.message.reply_text(
-        "Salom! My Tushlik botiga xush kelibsiz. Ro'yxatdan o'tish uchun telefon raqamingizni yuboring.",
+        "Assalomu alaykum! Botdan foydalanish uchun ro'yxatdan o'tishingiz kerak.\n\n"
+        "Iltimos, telefon raqamingizni yuboring:",
         reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(text="Telefon raqamni yuborish", request_contact=True)]],
+            [[KeyboardButton(text="📱 Telefon raqamni yuborish", request_contact=True)]],
             one_time_keyboard=True,
             resize_keyboard=True,
-        ),
+        )
     )
     return PHONE
 
@@ -191,38 +191,46 @@ async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.contact:
         phone_number = update.message.contact.phone_number
     else:
-        await update.message.reply_text("Iltimos, \"Telefon raqamni yuborish\" tugmasini bosing.")
-        return PHONE
-    context.user_data["phone"] = phone_number
-    await update.message.reply_text("Rahmat! Endi to'liq ismingizni kiriting (Masalan: Abdurahmonov Sardor).")
+        phone_number = update.message.text.strip()
+        if not phone_number.replace('+', '').isdigit() or len(phone_number) < 9:
+            await update.message.reply_text("Iltimos, to'g'ri telefon raqam kiriting")
+            return PHONE
+    
+    context.user_data['phone'] = phone_number
+    await update.message.reply_text(
+        "Endi ismingizni yuboring:",
+        reply_markup=ReplyKeyboardRemove()
+    )
     return NAME
 
 async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    full_name = update.message.text
+    name = update.message.text.strip()
+    if len(name) < 2:
+        await update.message.reply_text("Iltimos, to'g'ri ism kiriting (kamida 2 ta harf)")
+        return NAME
+    
     user_id = str(update.effective_user.id)
+    phone = context.user_data.get('phone', '')
+    
     data = initialize_data()
     data["users"][user_id] = {
-        "name": full_name,
-        "phone": context.user_data["phone"],
+        "name": name,
+        "phone": phone,
         "balance": 0,
-        "registration_date": datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        "daily_price": 0,
+        "registered_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     save_data(data)
-    admins = initialize_admins()
-    if not admins["admins"]:
-        admins["admins"].append(user_id)
-        save_admins(admins)
+    
+    context.user_data.clear()
+    
+    keyboard = show_admin_keyboard() if user_id in initialize_admins()["admins"] else show_regular_keyboard()
     await update.message.reply_text(
-        f"Ro'yxatdan o'tdingiz, {full_name}!\n\nQuyidagi imkoniyatlardan foydalanishingiz mumkin:",
-        reply_markup=ReplyKeyboardMarkup(
-            [
-                ["💸 Balansim", "📊 Qatnashishlarim"],
-                ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
-                ["❓ Yordam"],
-            ],
-            resize_keyboard=True,
-        ),
+        f"Ro'yxatdan o'tish muvaffaqiyatli yakunlandi!\n"
+        f"Assalomu alaykum, {name}!",
+        reply_markup=keyboard
     )
+    
     return ConversationHandler.END
 
 # Allow users to change their name via button
@@ -1297,16 +1305,17 @@ def main():
         
     application = Application.builder().token(token).build()
 
-    # Add conversation handler for registration
-    conv_handler = ConversationHandler(
+    # Add registration conversation handler
+    registration_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            PHONE: [MessageHandler(filters.CONTACT, phone)],
+            PHONE: [MessageHandler(filters.CONTACT | filters.TEXT & ~filters.COMMAND, phone)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
         },
-        fallbacks=[CommandHandler('start', start)],
+        fallbacks=[CommandHandler('cancel', cancel_registration)],
+        allow_reentry=True
     )
-    application.add_handler(conv_handler)
+    application.add_handler(registration_handler)
 
     # Add name change conversation handler
     name_change_conv = ConversationHandler(
