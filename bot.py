@@ -134,7 +134,8 @@ def create_admin_keyboard():
             ["💵 Balans qo'shish", "💸 Balans kamaytirish"],
             ["📝 Kunlik narx", "📊 Bugungi qatnashuv"],
             ["🔄 Balanslarni nollash", "💰 Kassa"],
-            ["⬅️ Asosiy menyu", "❓ Yordam"],
+            ["✏️ Ism o'zgartirish", "❓ Yordam"],
+            ["⬅️ Asosiy menyu"]
         ],
         resize_keyboard=True,
     )
@@ -1454,6 +1455,186 @@ async def notify_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await query.edit_message_text(status_message)
 
+async def change_user_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to change a user's name"""
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text("Iltimos, foydalanuvchi ID va yangi ismni kiriting.\nMasalan: /change_name 123456789 Yangi Ism")
+            return
+            
+        target_id = context.args[0]
+        new_name = " ".join(context.args[1:])
+        
+        data = initialize_data()
+        if target_id not in data["users"]:
+            await update.message.reply_text("Bu foydalanuvchi topilmadi.")
+            return
+            
+        old_name = data["users"][target_id]["name"]
+        data["users"][target_id]["name"] = new_name
+        
+        # Update name in daily attendance if present
+        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        if today in data["daily_attendance"]:
+            # Update in confirmed list
+            if target_id in data["daily_attendance"][today]["confirmed"]:
+                data["daily_attendance"][today]["confirmed"].remove(target_id)
+                data["daily_attendance"][today]["confirmed"].append(target_id)
+            
+            # Update in declined list
+            if target_id in data["daily_attendance"][today]["declined"]:
+                data["daily_attendance"][today]["declined"].remove(target_id)
+                data["daily_attendance"][today]["declined"].append(target_id)
+            
+            # Update in pending list
+            if target_id in data["daily_attendance"][today]["pending"]:
+                data["daily_attendance"][today]["pending"].remove(target_id)
+                data["daily_attendance"][today]["pending"].append(target_id)
+        
+        # Update name in attendance history
+        for date in data["attendance_history"]:
+            if target_id in data["attendance_history"][date]["confirmed"]:
+                data["attendance_history"][date]["confirmed"].remove(target_id)
+                data["attendance_history"][date]["confirmed"].append(target_id)
+            if target_id in data["attendance_history"][date]["declined"]:
+                data["attendance_history"][date]["declined"].remove(target_id)
+                data["attendance_history"][date]["declined"].append(target_id)
+        
+        await save_data(data)
+        
+        await update.message.reply_text(f"Foydalanuvchi {old_name} ning ismi {new_name} ga o'zgartirildi.")
+        
+    except Exception as e:
+        logger.error(f"Error in change_user_name: {str(e)}")
+        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+
+async def start_name_change_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the process of changing a user's name as admin"""
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        data = initialize_data()
+        if not data["users"]:
+            await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
+            return
+            
+        # Create keyboard with user buttons
+        keyboard = []
+        for user_id, info in data["users"].items():
+            name = info.get("name", "Noma'lum")
+            button = InlineKeyboardButton(f"{name} (ID: {user_id})", callback_data=f"change_name_{user_id}")
+            keyboard.append([button])
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Ismini o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:", reply_markup=reply_markup)
+        
+    except Exception as e:
+        logger.error(f"Error in start_name_change_admin: {str(e)}")
+        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+
+async def name_change_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the name change callback"""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        # Check if user is admin
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        if uid not in admins["admins"]:
+            await query.edit_message_text("Siz admin emassiz.")
+            return
+        
+        # Get user ID from callback data
+        target_id = query.data.split("_")[2]
+        data = initialize_data()
+        
+        if target_id not in data["users"]:
+            await query.edit_message_text("Foydalanuvchi topilmadi.")
+            return
+        
+        # Store target ID in context for the next step
+        context.user_data["name_change_target"] = target_id
+        await query.edit_message_text("Yangi ismni kiriting:")
+        return "WAITING_FOR_NEW_NAME"
+        
+    except Exception as e:
+        logger.error(f"Error in name_change_callback: {str(e)}")
+        await query.edit_message_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+
+async def process_name_change_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process the new name for the selected user"""
+    try:
+        new_name = update.message.text.strip()
+        if not new_name:
+            await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
+            return "WAITING_FOR_NEW_NAME"
+            
+        target_id = context.user_data.get("name_change_target")
+        if not target_id:
+            await update.message.reply_text("Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+            return ConversationHandler.END
+            
+        data = initialize_data()
+        if target_id not in data["users"]:
+            await update.message.reply_text("Foydalanuvchi topilmadi.")
+            return ConversationHandler.END
+            
+        old_name = data["users"][target_id]["name"]
+        data["users"][target_id]["name"] = new_name
+        
+        # Update name in daily attendance if present
+        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        if today in data["daily_attendance"]:
+            # Update in confirmed list
+            if target_id in data["daily_attendance"][today]["confirmed"]:
+                data["daily_attendance"][today]["confirmed"].remove(target_id)
+                data["daily_attendance"][today]["confirmed"].append(target_id)
+            
+            # Update in declined list
+            if target_id in data["daily_attendance"][today]["declined"]:
+                data["daily_attendance"][today]["declined"].remove(target_id)
+                data["daily_attendance"][today]["declined"].append(target_id)
+            
+            # Update in pending list
+            if target_id in data["daily_attendance"][today]["pending"]:
+                data["daily_attendance"][today]["pending"].remove(target_id)
+                data["daily_attendance"][today]["pending"].append(target_id)
+        
+        # Update name in attendance history
+        for date in data["attendance_history"]:
+            if target_id in data["attendance_history"][date]["confirmed"]:
+                data["attendance_history"][date]["confirmed"].remove(target_id)
+                data["attendance_history"][date]["confirmed"].append(target_id)
+            if target_id in data["attendance_history"][date]["declined"]:
+                data["attendance_history"][date]["declined"].remove(target_id)
+                data["attendance_history"][date]["declined"].append(target_id)
+        
+        await save_data(data)
+        
+        await update.message.reply_text(
+            f"Foydalanuvchi {old_name} ning ismi {new_name} ga o'zgartirildi.",
+            reply_markup=create_admin_keyboard()
+        )
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Error in process_name_change_admin: {str(e)}")
+        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+        return ConversationHandler.END
+
 # ---------------------- Main Function ---------------------- #
 
 def main():
@@ -1529,6 +1710,7 @@ def main():
     application.add_handler(CommandHandler('backup', backup_command))
     application.add_handler(CommandHandler('notify_all', notify_all_users))
     application.add_handler(CommandHandler('update_daily_prices', update_all_daily_prices))
+    application.add_handler(CommandHandler('change_name', change_user_name))
 
     # Add message handlers for regular buttons
     application.add_handler(MessageHandler(filters.Regex("^💸 Balansim$"), check_balance))
@@ -1582,6 +1764,21 @@ def main():
         daily_backup,
         time=datetime.time(0, 0, tzinfo=TASHKENT_TZ)  # Run at midnight
     )
+
+    # Add name change conversation handler for admin
+    name_change_admin_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change_admin)
+        ],
+        states={
+            "WAITING_FOR_NEW_NAME": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name_change_admin)]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
+    )
+    application.add_handler(name_change_admin_conv)
+    
+    # Add callback query handler for name change
+    application.add_handler(CallbackQueryHandler(name_change_callback, pattern="^change_name_"))
 
     # Start the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
