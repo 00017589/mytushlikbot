@@ -1309,8 +1309,11 @@ def main():
     registration_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            PHONE: [MessageHandler(filters.CONTACT | filters.TEXT & ~filters.COMMAND, phone)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
+            PHONE: [
+                MessageHandler(filters.CONTACT, phone),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, phone)
+            ],
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)]
         },
         fallbacks=[CommandHandler('cancel', cancel_registration)],
         allow_reentry=True
