@@ -289,17 +289,68 @@ async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return NAME_CHANGE
 
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = str(update.effective_user.id)
-    new_name = update.message.text.strip()
-    data = initialize_data()
-    data["users"][user_id]["name"] = new_name
-    await save_data(data)
-    keyboard = create_regular_keyboard()
-    await update.message.reply_text(
-        f"Sizning ismingiz {new_name} ga o'zgartirildi.",
-        reply_markup=keyboard
-    )
-    return ConversationHandler.END
+    try:
+        new_name = update.message.text.strip()
+        if not new_name:
+            await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
+            return NAME_CHANGE
+            
+        uid = str(update.effective_user.id)
+        data = initialize_data()
+        
+        if uid not in data["users"]:
+            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+            return
+            
+        old_name = data["users"][uid]["name"]
+        data["users"][uid]["name"] = new_name
+        
+        # Update name in daily attendance if present
+        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        if today in data["daily_attendance"]:
+            # Update in confirmed list
+            if uid in data["daily_attendance"][today]["confirmed"]:
+                data["daily_attendance"][today]["confirmed"].remove(uid)
+                data["daily_attendance"][today]["confirmed"].append(uid)
+            
+            # Update in declined list
+            if uid in data["daily_attendance"][today]["declined"]:
+                data["daily_attendance"][today]["declined"].remove(uid)
+                data["daily_attendance"][today]["declined"].append(uid)
+            
+            # Update in pending list
+            if uid in data["daily_attendance"][today]["pending"]:
+                data["daily_attendance"][today]["pending"].remove(uid)
+                data["daily_attendance"][today]["pending"].append(uid)
+        
+        # Update name in attendance history
+        for date in data["attendance_history"]:
+            if uid in data["attendance_history"][date]["confirmed"]:
+                data["attendance_history"][date]["confirmed"].remove(uid)
+                data["attendance_history"][date]["confirmed"].append(uid)
+            if uid in data["attendance_history"][date]["declined"]:
+                data["attendance_history"][date]["declined"].remove(uid)
+                data["attendance_history"][date]["declined"].append(uid)
+        
+        await save_data(data)
+        
+        await update.message.reply_text(
+            f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
+            reply_markup=ReplyKeyboardMarkup(
+                [
+                    ["💸 Balansim", "📊 Qatnashishlarim"],
+                    ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
+                    ["❓ Yordam"],
+                ],
+                resize_keyboard=True,
+            ),
+        )
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Error in process_name_change: {str(e)}")
+        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+        return ConversationHandler.END
 
 # Allow users to change their name via button
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
