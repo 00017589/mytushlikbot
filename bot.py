@@ -157,13 +157,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     data = initialize_data()
     admins = initialize_admins()
+    
     if user_id in data["users"]:
         user = data["users"][user_id]
-        keyboard = create_admin_keyboard() if user_id in admins["admins"] else create_regular_keyboard()
-        await update.message.reply_text(
-            f"Assalomu alaykum, {user['name']}!\nBotga xush kelibsiz!",
-            reply_markup=keyboard
-        )
+        if user_id in admins["admins"]:
+            keyboard = create_admin_keyboard()
+            await update.message.reply_text(
+                f"Assalomu alaykum, {user['name']}!\n"
+                f"Admin paneliga xush kelibsiz!",
+                reply_markup=keyboard
+            )
+        else:
+            keyboard = create_regular_keyboard()
+            await update.message.reply_text(
+                f"Assalomu alaykum, {user['name']}!\n"
+                f"Botga xush kelibsiz!",
+                reply_markup=keyboard
+            )
         return ConversationHandler.END
     await update.message.reply_text(
         "Assalomu alaykum! Botdan foydalanish uchun ro'yxatdan o'tishingiz kerak.\n\n"
@@ -624,28 +634,13 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Hozircha foydalanuvchilar mavjud emas.")
             return
             
-        # Get current page from context or set to 1
-        current_page = context.user_data.get('user_list_page', 1)
-        
         # Sort users by name
         sorted_users = sorted(data["users"].items(), key=lambda x: x[1]["name"])
         
-        # Calculate total pages
-        users_per_page = 3
-        total_pages = (len(sorted_users) + users_per_page - 1) // users_per_page
-        
-        # Ensure current page is valid
-        current_page = max(1, min(current_page, total_pages))
-        
-        # Get users for current page
-        start_idx = (current_page - 1) * users_per_page
-        end_idx = start_idx + users_per_page
-        page_users = sorted_users[start_idx:end_idx]
-        
         # Build message
-        message = f"📋 Foydalanuvchilar ro'yxati (Sahifa {current_page}/{total_pages}):\n\n"
+        message = "📋 Foydalanuvchilar ro'yxati:\n\n"
         
-        for user_id, user_data in page_users:
+        for user_id, user_data in sorted_users:
             name = user_data.get("name", "N/A")
             phone = user_data.get("phone", "N/A")
             balance = user_data.get("balance", 0)
@@ -662,41 +657,18 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"────────────────────\n"
             )
         
-        # Add navigation buttons
-        keyboard = []
-        if current_page > 1:
-            keyboard.append([InlineKeyboardButton("⬅️ Oldingi", callback_data=f"user_list_{current_page-1}")])
-        if current_page < total_pages:
-            keyboard.append([InlineKeyboardButton("Keyingi ➡️", callback_data=f"user_list_{current_page+1}")])
-        
         # Add summary at the end
         total_users = len(data["users"])
         total_balance = sum(user.get("balance", 0) for user in data["users"].values())
         message += f"\n📊 Jami foydalanuvchilar: {total_users} ta\n"
         message += f"💰 Jami balans: {total_balance:,} so'm"
         
-        # Send message with navigation buttons
-        await update.message.reply_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
-        )
+        # Send message
+        await update.message.reply_text(message)
         
     except Exception as e:
         logger.error(f"Error in view_users: {str(e)}")
         await update.message.reply_text("Foydalanuvchilar ro'yxatini ko'rsatishda xatolik yuz berdi.")
-
-async def user_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    # Extract page number from callback data
-    page = int(query.data.split('_')[-1])
-    
-    # Store current page in context
-    context.user_data['user_list_page'] = page
-    
-    # Call view_users with the new page
-    await view_users(update, context)
 
 # Admin: View today's attendance
 async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -985,6 +957,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------- Keyboard Functions ---------------------- #
 
 async def show_admin_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    admins = initialize_admins()
+    if uid not in admins["admins"]:
+        await update.message.reply_text("Siz admin emassiz.")
+        return
     keyboard = create_admin_keyboard()
     await update.message.reply_text(
         "Admin paneli:",
@@ -999,10 +976,12 @@ async def show_regular_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_admin(str(update.effective_user.id), initialize_admins()):
-        await show_admin_keyboard(update, context)
-    else:
+    uid = str(update.effective_user.id)
+    admins = initialize_admins()
+    if uid not in admins["admins"]:
         await update.message.reply_text("Siz admin emassiz.")
+        return
+    await show_admin_keyboard(update, context)
 
 # ---------------------- Testing Command ---------------------- #
 
@@ -1384,8 +1363,6 @@ def main():
     application.add_handler(CallbackQueryHandler(remove_user_callback, pattern="^remove_user_"))
     application.add_handler(CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_"))
     application.add_handler(CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_"))
-    application.add_handler(CallbackQueryHandler(user_list_callback, pattern="^user_list_"))
-    application.add_handler(CallbackQueryHandler(notify_all_callback, pattern="^(confirm|cancel)_notify_all$"))
 
     # Schedule daily jobs
     job_queue = application.job_queue
