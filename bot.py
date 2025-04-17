@@ -202,26 +202,71 @@ async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return NAME
 
 async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = str(update.effective_user.id)
-    name_text = update.message.text.strip()
-    if not name_text:
-        await update.message.reply_text("Iltimos, ismingizni kiriting:")
-        return NAME
-    data = initialize_data()
-    data["users"][user_id] = {
-        "name": name_text,
-        "phone": context.user_data['phone'],
-        "balance": 0,
-        "daily_price": 25000,
-        "attendance": False
-    }
-    await save_data(data)
-    keyboard = create_regular_keyboard()
-    await update.message.reply_text(
-        f"Ro'yxatdan o'tish muvaffaqiyatli yakunlandi!\nAssalomu alaykum, {name_text}!",
-        reply_markup=keyboard
-    )
-    return ConversationHandler.END
+    try:
+        name_text = update.message.text.strip()
+        if not name_text:
+            await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
+            return NAME
+            
+        uid = str(update.effective_user.id)
+        data = initialize_data()
+        
+        if uid not in data["users"]:
+            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+            return
+            
+        old_name = data["users"][uid]["name"]
+        data["users"][uid]["name"] = name_text
+        # Set default daily price to 25000 if not set
+        if "daily_price" not in data["users"][uid] or data["users"][uid]["daily_price"] == 0:
+            data["users"][uid]["daily_price"] = 25000
+        await save_data(data)
+        
+        await update.message.reply_text(
+            f"Sizning ismingiz {old_name} dan {name_text} ga o'zgartirildi.",
+            reply_markup=ReplyKeyboardMarkup(
+                [
+                    ["💸 Balansim", "📊 Qatnashishlarim"],
+                    ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
+                    ["❓ Yordam"],
+                ],
+                resize_keyboard=True,
+            ),
+        )
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Error in process_name_change: {str(e)}")
+        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+        return ConversationHandler.END
+
+async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Update all users' daily prices to 25000 if they are 0"""
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        data = initialize_data()
+        updated_count = 0
+        
+        for user_id, user_data in data["users"].items():
+            if "daily_price" not in user_data or user_data["daily_price"] == 0:
+                user_data["daily_price"] = 25000
+                updated_count += 1
+                
+        if updated_count > 0:
+            await save_data(data)
+            await update.message.reply_text(f"✅ {updated_count} ta foydalanuvchining kunlik narxi 25,000 so'mga o'zgartirildi.")
+        else:
+            await update.message.reply_text("Barcha foydalanuvchilarning kunlik narxi allaqachon 25,000 so'm.")
+            
+    except Exception as e:
+        logger.error(f"Error in update_all_daily_prices: {str(e)}")
+        await update.message.reply_text("Kunlik narxlarni yangilashda xatolik yuz berdi.")
 
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
@@ -1364,6 +1409,7 @@ def main():
     application.add_handler(CommandHandler('test_survey', test_survey))
     application.add_handler(CommandHandler('backup', backup_command))
     application.add_handler(CommandHandler('notify_all', notify_all_users))
+    application.add_handler(CommandHandler('update_daily_prices', update_all_daily_prices))
 
     # Add message handlers for regular buttons
     application.add_handler(MessageHandler(filters.Regex("^💸 Balansim$"), check_balance))
