@@ -161,6 +161,28 @@ def is_admin(user_id, admins):
 
 # ---------------------- Registration and Name Change ---------------------- #
 
+def create_admin_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["👥 Foydalanuvchilar", "❌ Foydalanuvchini o'chirish"],
+            ["💵 Balans qo'shish", "💸 Balans kamaytirish"],
+            ["📝 Kunlik narx", "📊 Bugungi qatnashuv"],
+            ["🔄 Balanslarni nollash", "💰 Kassa"],
+            ["⬅️ Asosiy menyu", "❓ Yordam"],
+        ],
+        resize_keyboard=True,
+    )
+
+def create_regular_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["💸 Balansim", "📊 Qatnashishlarim"],
+            ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
+            ["❓ Yordam"],
+        ],
+        resize_keyboard=True,
+    )
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     data = initialize_data()
@@ -168,7 +190,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     if user_id in data["users"]:
         user = data["users"][user_id]
-        keyboard = show_admin_keyboard() if user_id in admins["admins"] else show_regular_keyboard()
+        keyboard = create_admin_keyboard() if user_id in admins["admins"] else create_regular_keyboard()
         await update.message.reply_text(
             f"Assalomu alaykum, {user['name']}!\n"
             f"Botga xush kelibsiz!",
@@ -221,7 +243,7 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     }
     save_data(data)
     
-    keyboard = show_regular_keyboard()
+    keyboard = create_regular_keyboard()
     await update.message.reply_text(
         f"Ro'yxatdan o'tish muvaffaqiyatli yakunlandi!\n"
         f"Assalomu alaykum, {name}!",
@@ -258,7 +280,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         if uid not in data["users"]:
             await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
-            return ConversationHandler.END
+            return
             
         old_name = data["users"][uid]["name"]
         data["users"][uid]["name"] = new_name
@@ -979,29 +1001,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------- Keyboard Functions ---------------------- #
 
 async def show_admin_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = create_admin_keyboard()
     await update.message.reply_text(
         "Admin paneli:",
-        reply_markup=ReplyKeyboardMarkup(
-            [
-                ["👥 Foydalanuvchilar", "❌ Foydalanuvchini o'chirish"],
-                ["💵 Balans qo'shish", "💸 Balans kamaytirish"],
-                ["📝 Kunlik narx", "📊 Bugungi qatnashuv"],
-                ["🔄 Balanslarni nollash", "💰 Kassa"],
-                ["⬅️ Asosiy menyu", "❓ Yordam"],
-            ],
-            resize_keyboard=True,
-        ),
+        reply_markup=keyboard
     )
 
 async def show_regular_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        ["💸 Balansim", "📊 Qatnashishlarim"],
-        ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
-        ["❓ Yordam"],
-    ]
+    keyboard = create_regular_keyboard()
     await update.message.reply_text(
         "Quyidagi tugmalardan birini tanlang:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        reply_markup=keyboard
     )
 
 async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
