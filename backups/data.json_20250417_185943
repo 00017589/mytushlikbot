@@ -41,13 +41,6 @@
             "balance": 0,
             "daily_price": 0,
             "attendance": false
-        },
-        "135391708": {
-            "name": "Mirzayev Sherzodbek",
-            "phone": "+998935597028",
-            "balance": 0,
-            "daily_price": 0,
-            "attendance": false
         }
     },
     "daily_attendance": {
