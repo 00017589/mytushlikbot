@@ -94,21 +94,41 @@ def set_daily_price_for_all_users(data, price=25000):
     return data
 
 async def create_backup():
+    """Create a backup of all data files with timestamp"""
     try:
+        # Create backups directory if it doesn't exist
         if not os.path.exists("backups"):
             os.makedirs("backups")
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        for fname in [DATA_FILE, ADMIN_FILE, "lunch_bot.db"]:
-            if os.path.exists(fname):
-                dest = os.path.join("backups", f"{fname}_{timestamp}")
-                shutil.copy2(fname, dest)
-                backups = sorted(glob.glob(os.path.join("backups", f"{fname}_*")))
-                for old in backups[:-5]:
-                    os.remove(old)
+            
+        timestamp = datetime.datetime.now(TASHKENT_TZ).strftime("%Y%m%d_%H%M%S")
+        backup_files = []
+        
+        # Backup data.json
+        if os.path.exists(DATA_FILE):
+            backup_path = os.path.join("backups", f"data_{timestamp}.json")
+            shutil.copy2(DATA_FILE, backup_path)
+            backup_files.append(backup_path)
+            
+        # Backup admins.json
+        if os.path.exists(ADMIN_FILE):
+            backup_path = os.path.join("backups", f"admins_{timestamp}.json")
+            shutil.copy2(ADMIN_FILE, backup_path)
+            backup_files.append(backup_path)
+            
+        # Keep only last 7 days of backups
+        for file_pattern in ["data_*.json", "admins_*.json"]:
+            backup_files = sorted(glob.glob(os.path.join("backups", file_pattern)))
+            for old_backup in backup_files[:-7]:  # Keep last 7 days
+                try:
+                    os.remove(old_backup)
+                except Exception as e:
+                    logger.error(f"Failed to remove old backup {old_backup}: {e}")
+                    
+        return backup_files
+        
     except Exception as e:
         logger.error(f"Backup creation failed: {e}")
         raise
-
 
 async def save_data(data):
     await create_backup()
@@ -1300,7 +1320,6 @@ async def daily_backup(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Failed to notify admin {admin_id}: {e}")
 
-# ---------------------- Add these functions after other functions
 async def verify_backup(backup_path: str) -> bool:
     """Verify that a backup file is valid"""
     try:
@@ -1313,16 +1332,6 @@ async def verify_backup(backup_path: str) -> bool:
                 if 'users' not in data:
                     return False
                 return True
-        elif backup_path.endswith('.db'):
-            # Basic SQLite database validation
-            import sqlite3
-            conn = sqlite3.connect(backup_path)
-            cursor = conn.cursor()
-            # Check if tables exist
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = cursor.fetchall()
-            conn.close()
-            return len(tables) > 0
         return False
     except Exception as e:
         logger.error(f"Backup verification failed: {e}")
@@ -1622,7 +1631,15 @@ async def process_name_change_admin(update: Update, context: ContextTypes.DEFAUL
                 data["attendance_history"][date]["declined"].remove(target_id)
                 data["attendance_history"][date]["declined"].append(target_id)
         
+        # Save the changes
         await save_data(data)
+        
+        # Verify the changes were saved
+        data = initialize_data()  # Reload data to verify
+        if data["users"][target_id]["name"] != new_name:
+            logger.error(f"Name change not saved properly for user {target_id}")
+            await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+            return ConversationHandler.END
         
         await update.message.reply_text(
             f"Foydalanuvchi {old_name} ning ismi {new_name} ga o'zgartirildi.",
