@@ -332,7 +332,15 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
                 data["attendance_history"][date]["declined"].remove(uid)
                 data["attendance_history"][date]["declined"].append(uid)
         
+        # Save the changes
         await save_data(data)
+        
+        # Verify the changes were saved
+        data = initialize_data()  # Reload data to verify
+        if data["users"][uid]["name"] != new_name:
+            logger.error(f"Name change not saved properly for user {uid}")
+            await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+            return ConversationHandler.END
         
         await update.message.reply_text(
             f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
