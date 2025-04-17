@@ -73,93 +73,53 @@ def initialize_data():
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     else:
-        data = {
-            "users": {},
-            "daily_attendance": {},
-            "attendance_history": {},
-            "kassa": 0
-        }
-    
-    # Ensure all required fields exist
-    if "users" not in data:
-        data["users"] = {}
-    if "daily_attendance" not in data:
-        data["daily_attendance"] = {}
-    if "attendance_history" not in data:
-        data["attendance_history"] = {}
-    if "kassa" not in data:
-        data["kassa"] = 0
-        
+        data = {"users": {}, "daily_attendance": {}, "attendance_history": {}, "kassa": 0}
+    data.setdefault("users", {})
+    data.setdefault("daily_attendance", {})
+    data.setdefault("attendance_history", {})
+    data.setdefault("kassa", 0)
     return data
+
 
 def initialize_admins():
     if os.path.exists(ADMIN_FILE):
         with open(ADMIN_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    else:
-        return {"admins": []}
+    return {"admins": []}
 
 async def create_backup():
-    """Create backup of all data files and return paths of created backups"""
     try:
-        # Create backups directory if it doesn't exist
         if not os.path.exists("backups"):
             os.makedirs("backups")
-            
-        # Get current timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Backup files
-        backup_files = []
-        files_to_backup = ["data.json", "admins.json", "lunch_bot.db"]
-        
-        for file_name in files_to_backup:
-            if os.path.exists(file_name):
-                backup_name = f"{file_name}_{timestamp}"
-                backup_path = os.path.join("backups", backup_name)
-                shutil.copy2(file_name, backup_path)
-                backup_files.append(backup_path)
-                logger.info(f"Created backup: {backup_path}")
-                
-                # Keep only last 5 backups
-                backup_pattern = os.path.join("backups", f"{file_name}_*")
-                backups = sorted(glob.glob(backup_pattern))
-                if len(backups) > 5:
-                    for old_backup in backups[:-5]:
-                        os.remove(old_backup)
-                        logger.info(f"Removed old backup: {old_backup}")
-        
-        return backup_files
+        for fname in [DATA_FILE, ADMIN_FILE, "lunch_bot.db"]:
+            if os.path.exists(fname):
+                dest = os.path.join("backups", f"{fname}_{timestamp}")
+                shutil.copy2(fname, dest)
+                backups = sorted(glob.glob(os.path.join("backups", f"{fname}_*")))
+                for old in backups[:-5]:
+                    os.remove(old)
     except Exception as e:
         logger.error(f"Backup creation failed: {e}")
         raise
 
-def save_data(data):
-    try:
-        # Create backup before saving
-        asyncio.run(create_backup())
-        
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        logger.error(f"Error saving data: {str(e)}")
-        raise
 
-def save_admins(admins):
-    try:
-        # Create backup before saving
-        asyncio.run(create_backup())
-        
-        with open(ADMIN_FILE, "w", encoding="utf-8") as f:
-            json.dump(admins, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        logger.error(f"Error saving admins: {str(e)}")
-        raise
+async def save_data(data):
+    await create_backup()
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+
+async def save_admins(admins):
+    await create_backup()
+    with open(ADMIN_FILE, "w", encoding="utf-8") as f:
+        json.dump(admins, f, ensure_ascii=False, indent=4)
+
 
 def is_admin(user_id, admins):
-    return str(user_id) in admins["admins"]
+    return str(user_id) in admins.get("admins", [])
 
-# ---------------------- Registration and Name Change ---------------------- #
+# ---------------------- Keyboards ---------------------- #
 
 def create_admin_keyboard():
     return ReplyKeyboardMarkup(
@@ -173,6 +133,7 @@ def create_admin_keyboard():
         resize_keyboard=True,
     )
 
+
 def create_regular_keyboard():
     return ReplyKeyboardMarkup(
         [
@@ -183,21 +144,27 @@ def create_regular_keyboard():
         resize_keyboard=True,
     )
 
+# ---------------------- Registration and Name Change ---------------------- #
+
+async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "Ro'yxatdan o'tish bekor qilindi.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ConversationHandler.END
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     data = initialize_data()
     admins = initialize_admins()
-    
     if user_id in data["users"]:
         user = data["users"][user_id]
         keyboard = create_admin_keyboard() if user_id in admins["admins"] else create_regular_keyboard()
         await update.message.reply_text(
-            f"Assalomu alaykum, {user['name']}!\n"
-            f"Botga xush kelibsiz!",
+            f"Assalomu alaykum, {user['name']}!\nBotga xush kelibsiz!",
             reply_markup=keyboard
         )
         return ConversationHandler.END
-    
     await update.message.reply_text(
         "Assalomu alaykum! Botdan foydalanish uchun ro'yxatdan o'tishingiz kerak.\n\n"
         "Iltimos, telefon raqamingizni yuboring:",
@@ -217,7 +184,6 @@ async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if not phone_number.replace('+', '').isdigit() or len(phone_number) < 9:
             await update.message.reply_text("Iltimos, to'g'ri telefon raqam kiriting")
             return PHONE
-    
     context.user_data['phone'] = phone_number
     await update.message.reply_text(
         "Iltimos, ismingizni kiriting:",
@@ -227,26 +193,44 @@ async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
-    name = update.message.text.strip()
-    
-    if not name:
+    name_text = update.message.text.strip()
+    if not name_text:
         await update.message.reply_text("Iltimos, ismingizni kiriting:")
         return NAME
-    
     data = initialize_data()
     data["users"][user_id] = {
-        "name": name,
+        "name": name_text,
         "phone": context.user_data['phone'],
         "balance": 0,
         "daily_price": 0,
         "attendance": False
     }
-    save_data(data)
-    
+    await save_data(data)
     keyboard = create_regular_keyboard()
     await update.message.reply_text(
-        f"Ro'yxatdan o'tish muvaffaqiyatli yakunlandi!\n"
-        f"Assalomu alaykum, {name}!",
+        f"Ro'yxatdan o'tish muvaffaqiyatli yakunlandi!\nAssalomu alaykum, {name_text}!",
+        reply_markup=keyboard
+    )
+    return ConversationHandler.END
+
+async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = str(update.effective_user.id)
+    data = initialize_data()
+    if user_id not in data["users"]:
+        await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+        return ConversationHandler.END
+    await update.message.reply_text("Yangi ismingizni kiriting:")
+    return NAME_CHANGE
+
+async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = str(update.effective_user.id)
+    new_name = update.message.text.strip()
+    data = initialize_data()
+    data["users"][user_id]["name"] = new_name
+    await save_data(data)
+    keyboard = create_regular_keyboard()
+    await update.message.reply_text(
+        f"Sizning ismingiz {new_name} ga o'zgartirildi.",
         reply_markup=keyboard
     )
     return ConversationHandler.END
@@ -284,7 +268,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
             
         old_name = data["users"][uid]["name"]
         data["users"][uid]["name"] = new_name
-        save_data(data)
+        await save_data(data)
         
         await update.message.reply_text(
             f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
@@ -335,7 +319,7 @@ async def send_attendance_request(context: ContextTypes.DEFAULT_TYPE, test: bool
             )
         except Exception as e:
             logger.error(f"Failed to send survey to user {uid}: {e}")
-    save_data(data)
+    await save_data(data)
 
 async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.datetime.now(TASHKENT_TZ)
@@ -412,7 +396,7 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
             "declined": data["daily_attendance"][today]["declined"].copy(),
             "menu": data["daily_attendance"][today].get("menu", {}).copy()
         }
-    save_data(data)
+    await save_data(data)
 
 async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -462,7 +446,7 @@ async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.edit_message_text(f"Siz tanladingiz: {dish_name}")
         else:
             await query.edit_message_text("Noto'g'ri tanlov.")
-    save_data(data)
+    await save_data(data)
 
 async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.datetime.now(TASHKENT_TZ)
@@ -481,7 +465,7 @@ async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del data["daily_attendance"][today]["menu"][uid]
     if uid not in data["daily_attendance"][today]["declined"]:
         data["daily_attendance"][today]["declined"].append(uid)
-    save_data(data)
+    await save_data(data)
     await update.message.reply_text("Siz tushlikni bekor qildingiz.")
 
 # ---------------------- Admin Functions ---------------------- #
@@ -541,7 +525,7 @@ async def balance_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT
     else:
         new_balance = old_balance - amount
     data["users"][target_id]["balance"] = new_balance
-    save_data(data)
+    await save_data(data)
     await update.message.reply_text(f"{data['users'][target_id]['name']} ning balansi {old_balance:,} so'mdan {new_balance:,} so'mga o'zgartirildi.")
     return ConversationHandler.END
 
@@ -589,7 +573,7 @@ async def daily_price_mod_enter_amount(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("Foydalanuvchi topilmadi.")
         return ConversationHandler.END
     data["users"][target_id]["daily_price"] = price
-    save_data(data)
+    await save_data(data)
     await update.message.reply_text(f"{data['users'][target_id]['name']} ning kunlik narxi {price:,} so'mga o'zgartirildi.")
     return ConversationHandler.END
 
@@ -803,7 +787,7 @@ async def reset_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         old_bal = data["users"][target_id]["balance"]
         data["users"][target_id]["balance"] = 0
-        save_data(data)
+        await save_data(data)
         await update.message.reply_text(f"{data['users'][target_id]['name']} ning balansi {old_bal:,} so'mdan 0 so'mga tushirildi.")
     else:
         kb = InlineKeyboardMarkup(
@@ -826,7 +810,7 @@ async def balance_reset_callback(update: Update, context: ContextTypes.DEFAULT_T
         total = sum(info["balance"] for info in data["users"].values())
         for user_id in data["users"]:
             data["users"][user_id]["balance"] = 0
-        save_data(data)
+        await save_data(data)
         await query.edit_message_text(f"✅ {count} foydalanuvchining jami {total:,} so'mli balansi nolga tushirildi.")
     else:
         await query.edit_message_text("Balanslarni nolga tushirish bekor qilindi.")
@@ -837,7 +821,7 @@ async def make_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admins = initialize_admins()
     if not admins["admins"]:
         admins["admins"].append(uid)
-        save_admins(admins)
+        await save_admins(admins)
         await update.message.reply_text("Siz admin sifatida tayinlandingiz!")
         return
     if uid in admins["admins"]:
@@ -853,7 +837,7 @@ async def make_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Bu foydalanuvchi topilmadi.")
             return
         admins["admins"].append(new_admin)
-        save_admins(admins)
+        await save_admins(admins)
         try:
             await context.bot.send_message(chat_id=new_admin, text="Tabriklaymiz! Siz admin sifatida tayinlandingiz.")
         except Exception as e:
@@ -881,7 +865,7 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Siz yagona admin, o'zingizni o'chira olmaysiz.")
         return
     admins["admins"].remove(target)
-    save_admins(admins)
+    await save_admins(admins)
     try:
         await context.bot.send_message(chat_id=target, text="Sizning admin huquqlaringiz bekor qilindi.")
     except Exception as e:
@@ -933,7 +917,7 @@ async def send_low_balance_notifications(context: ContextTypes.DEFAULT_TYPE):
                 data["users"][user_id]["last_balance_notification"] = today
             except Exception as e:
                 logger.error(f"Failed to send low balance notification to user {user_id}: {e}")
-    save_data(data)
+    await save_data(data)
 
 # Legacy reminder function (optional)
 async def remind_debtors(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1107,7 +1091,7 @@ async def remove_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             if target_id in data["attendance_history"][date].get("menu", {}):
                 del data["attendance_history"][date]["menu"][target_id]
         
-        save_data(data)
+        await save_data(data)
         await query.edit_message_text(f"✅ Foydalanuvchi {user_name} (ID: {target_id}) muvaffaqiyatli o'chirildi.")
         
     except Exception as e:
@@ -1318,7 +1302,7 @@ def main():
             PHONE: [MessageHandler(filters.CONTACT | filters.TEXT & ~filters.COMMAND, phone)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel_registration)],
         allow_reentry=True
     )
     application.add_handler(registration_handler)
@@ -1335,7 +1319,6 @@ def main():
         fallbacks=[CommandHandler('start', start)]
     )
     application.add_handler(name_change_conv)
-
     # Add admin balance modification conversation handler
     balance_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^(💵 Balans qo'shish|💸 Balans kamaytirish)$"), start_balance_modification)],
