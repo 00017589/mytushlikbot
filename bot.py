@@ -72,10 +72,20 @@ def initialize_data():
         data = {
             "users": {},
             "daily_attendance": {},
-            "attendance_history": {}
+            "attendance_history": {},
+            "kassa": 0
         }
+    
+    # Ensure all required fields exist
+    if "users" not in data:
+        data["users"] = {}
+    if "daily_attendance" not in data:
+        data["daily_attendance"] = {}
+    if "attendance_history" not in data:
+        data["attendance_history"] = {}
     if "kassa" not in data:
         data["kassa"] = 0
+        
     return data
 
 def initialize_admins():
@@ -628,30 +638,40 @@ async def user_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # Admin: View today's attendance
 async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    admins = initialize_admins()
-    data = initialize_data()
-    if uid not in admins["admins"]:
-        await update.message.reply_text("Siz admin emassiz.")
-        return
-    today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-    if today not in data["daily_attendance"]:
-        await update.message.reply_text("Bugun tushlik ma'lumotlari topilmadi.")
-        return
-    confirmed = data["daily_attendance"][today]["confirmed"]
-    if not confirmed:
-        await update.message.reply_text("Bugun tushlik qatnashuvchilar yo'q.")
-        return
-    msg = f"🍽️ {today} - Bugungi tushlik qatnashuvchilari:\n\n"
-    i = 1
-    for user_id in confirmed:
-        if user_id in data["users"]:
-            name = data["users"][user_id]["name"]
-            dish = data["daily_attendance"][today].get("menu", {}).get(user_id, "N/A")
-            dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
-            msg += f"{i}. {name} - {dish_name}\n"
-            i += 1
-    await update.message.reply_text(msg)
+    try:
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        data = initialize_data()
+        
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+            
+        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        
+        if today not in data["daily_attendance"]:
+            await update.message.reply_text("Bugun tushlik ma'lumotlari topilmadi.")
+            return
+            
+        confirmed = data["daily_attendance"][today]["confirmed"]
+        if not confirmed:
+            await update.message.reply_text("Bugun tushlik qatnashuvchilar yo'q.")
+            return
+            
+        message = f"🍽️ {today} - Bugungi tushlik qatnashuvchilari:\n\n"
+        
+        for i, user_id in enumerate(confirmed, 1):
+            if user_id in data["users"]:
+                name = data["users"][user_id]["name"]
+                dish = data["daily_attendance"][today].get("menu", {}).get(user_id, "N/A")
+                dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
+                message += f"{i}. {name} - {dish_name}\n"
+        
+        await update.message.reply_text(message)
+        
+    except Exception as e:
+        logger.error(f"Error in view_attendance_today_admin: {str(e)}")
+        await update.message.reply_text("Tushlik qatnashuvchilarini ko'rsatishda xatolik yuz berdi.")
 
 # Admin: View all balances
 async def view_all_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1115,7 +1135,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^💵 Balans qo'shish$"), start_balance_modification))
     application.add_handler(MessageHandler(filters.Regex("^💸 Balans kamaytirish$"), start_balance_modification))
     application.add_handler(MessageHandler(filters.Regex("^📝 Kunlik narx$"), start_daily_price_modification))
-    application.add_handler(MessageHandler(filters.Regex("^�� Bugungi qatnashuv$"), view_attendance_today_admin))
+    application.add_handler(MessageHandler(filters.Regex("^📊 Bugungi qatnashuv$"), view_attendance_today_admin))
     application.add_handler(MessageHandler(filters.Regex("^🔄 Balanslarni nollash$"), reset_balance))
     application.add_handler(MessageHandler(filters.Regex("^💰 Kassa$"), view_kassa))
     application.add_handler(MessageHandler(filters.Regex("^⬅️ Asosiy menyu$"), show_regular_keyboard))
