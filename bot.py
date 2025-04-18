@@ -1353,8 +1353,103 @@ async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ---------------------- Testing Command ---------------------- #
 
 async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_attendance_request(context, test=True)
-    await update.message.reply_text("Test survey yuborildi!")
+    """Send test survey to all users and schedule summary after 5 minutes"""
+    try:
+        # Check if user is admin
+        uid = str(update.effective_user.id)
+        admins = initialize_admins()
+        if uid not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+
+        # Send survey to all users
+        await send_attendance_request(context, test=True)
+        
+        # Schedule summary after 5 minutes
+        context.job_queue.run_once(
+            send_test_summary,
+            300,  # 5 minutes in seconds
+            data={"admin_id": uid}
+        )
+        
+        await update.message.reply_text(
+            "Test survey yuborildi! 5 daqiqadan so'ng natijalar yuboriladi."
+        )
+    except Exception as e:
+        logger.error(f"Error in test_survey: {str(e)}")
+        await update.message.reply_text("Test survey yuborishda xatolik yuz berdi.")
+
+async def send_test_summary(context: ContextTypes.DEFAULT_TYPE):
+    """Send summary of test survey results"""
+    try:
+        # Get the admin ID from job data
+        admin_id = context.job.data.get("admin_id")
+        if not admin_id:
+            logger.error("Admin ID not found in job data")
+            return
+
+        # Get current data
+        data = await initialize_data()
+        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        
+        if today not in data["daily_attendance"]:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text="❌ Bugun uchun tushlik ma'lumotlari topilmadi."
+            )
+            return
+
+        # Get attendance data
+        confirmed = data["daily_attendance"][today]["confirmed"]
+        declined = data["daily_attendance"][today]["declined"]
+        pending = data["daily_attendance"][today]["pending"]
+        menu_choices = data["daily_attendance"][today].get("menu", {})
+
+        # Calculate food statistics
+        food_stats = {}
+        total_amount = 0
+        for user_id in confirmed:
+            if user_id in data["users"]:
+                # Use user's specific daily price
+                daily_price = data["users"][user_id].get("daily_price", 25000)
+                total_amount += daily_price
+                
+                # Track food choices
+                dish = menu_choices.get(user_id)
+                if dish:
+                    food_stats[dish] = food_stats.get(dish, 0) + 1
+
+        # Sort food choices by popularity
+        sorted_foods = sorted(food_stats.items(), key=lambda x: x[1], reverse=True)
+
+        # Prepare summary message
+        summary = f"📊 Test Survey Natijalari:\n\n"
+        summary += f"👥 Jami foydalanuvchilar: {len(data['users'])} ta\n"
+        summary += f"✅ Qatnashuvchilar: {len(confirmed)} ta\n"
+        summary += f"❌ Qatnashmaganlar: {len(declined)} ta\n"
+        summary += f"⏳ Javob bermaganlar: {len(pending)} ta\n\n"
+
+        if confirmed:
+            summary += "🍽️ Tanlangan ovqatlar:\n"
+            for dish, count in sorted_foods:
+                dish_name = MENU_OPTIONS.get(dish, "N/A")
+                summary += f"• {dish_name}: {count} ta\n"
+            
+            summary += f"\n💰 Jami yig'ilgan summa: {total_amount:,} so'm"
+
+        # Send summary to admin
+        await context.bot.send_message(
+            chat_id=admin_id,
+            text=summary
+        )
+
+    except Exception as e:
+        logger.error(f"Error in send_test_summary: {str(e)}")
+        if admin_id:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=f"❌ Test survey natijalarini yuborishda xatolik yuz berdi: {str(e)}"
+            )
 
 # ---------------------- Scheduled Low Balance Notification ---------------------- #
 
@@ -1807,8 +1902,102 @@ async def process_admin_name_change(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
         return ConversationHandler.END
 
-# ---------------------- Main Function ---------------------- #
+# Add this after the imports
+def error_handler(func):
+    """Decorator for consistent error handling"""
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in {func.__name__}: {str(e)}")
+            if len(args) > 0 and isinstance(args[0], Update):
+                update = args[0]
+                await update.message.reply_text(
+                    f"Xatolik yuz berdi: {str(e)}\nIltimos, qayta urinib ko'ring."
+                )
+            return ConversationHandler.END
+    return wrapper
 
+# Replace the name change functions with the consolidated version
+@error_handler
+async def handle_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE, is_admin: bool = False) -> int:
+    """Unified name change handler for both admin and regular users"""
+    user_id = str(update.effective_user.id)
+    data = await initialize_data()
+    
+    if not is_admin and user_id not in data["users"]:
+        await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+        return ConversationHandler.END
+        
+    if is_admin:
+        # Admin-specific logic
+        target_id = context.user_data.get("target_id")
+        if not target_id:
+            await update.message.reply_text("Foydalanuvchi tanlanmadi.")
+            return ConversationHandler.END
+    else:
+        target_id = user_id
+        
+    new_name = update.message.text.strip()
+    if not new_name:
+        await update.message.reply_text("Ism bo'sh bo'lmasligi kerak.")
+        return NAME_CHANGE
+        
+    old_name = data["users"][target_id]["name"]
+    data["users"][target_id]["name"] = new_name
+    
+    # Update in database
+    await save_data(data)
+    
+    await update.message.reply_text(
+        f"Ism {old_name} dan {new_name} ga o'zgartirildi.",
+        reply_markup=create_admin_keyboard() if is_admin else create_regular_keyboard()
+    )
+    return ConversationHandler.END
+
+# Update the conversation handlers
+def setup_conversation_handlers(application):
+    """Set up all conversation handlers in one place"""
+    # Registration handler
+    registration_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            PHONE: [MessageHandler(filters.CONTACT | filters.TEXT & ~filters.COMMAND, phone)],
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_registration)]
+    )
+    application.add_handler(registration_handler)
+    
+    # Name change handler
+    name_change_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("ism_ozgartirish", lambda u, c: handle_name_change(u, c, False)),
+            MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), lambda u, c: handle_name_change(u, c, False))
+        ],
+        states={
+            NAME_CHANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: handle_name_change(u, c, False))]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
+    )
+    application.add_handler(name_change_handler)
+    
+    # Admin name change handler
+    admin_name_change_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), lambda u, c: handle_name_change(u, c, True))
+        ],
+        states={
+            NAME_CHANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: handle_name_change(u, c, True))]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
+    )
+    application.add_handler(admin_name_change_handler)
+    
+    # Add other handlers...
+    # ... existing code ...
+
+# Update the main function to use the new setup
 def main():
     # Create the Application and pass it your bot's token
     token = os.getenv('BOT_TOKEN')
@@ -1817,53 +2006,10 @@ def main():
         return
         
     application = Application.builder().token(token).build()
-
-    # Add registration conversation handler
-    registration_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            PHONE: [MessageHandler(filters.CONTACT | filters.TEXT & ~filters.COMMAND, phone)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_registration)],
-        allow_reentry=True
-    )
-    application.add_handler(registration_handler)
-
-    # Add name change conversation handler
-    name_change_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler('ism_ozgartirish', start_name_change),
-            MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change)
-        ],
-        states={
-            NAME_CHANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name_change)]
-        },
-        fallbacks=[CommandHandler('start', start)]
-    )
-    application.add_handler(name_change_conv)
-    # Add admin balance modification conversation handler
-    balance_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^(💵 Balans qo'shish|💸 Balans kamaytirish)$"), start_balance_modification)],
-        states={
-            ADMIN_BALANCE_SELECT_USER: [CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_")],
-            ADMIN_BALANCE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, balance_mod_enter_amount)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_balance_modification)]
-    )
-    application.add_handler(balance_conv)
-
-    # Add admin daily price adjustment conversation handler
-    daily_price_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^(📝 Kunlik narx)$"), start_daily_price_modification)],
-        states={
-            ADMIN_DAILY_PRICE_SELECT_USER: [CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_")],
-            ADMIN_DAILY_PRICE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_price_mod_enter_amount)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_daily_price_modification)]
-    )
-    application.add_handler(daily_price_conv)
-
+    
+    # Set up all conversation handlers
+    setup_conversation_handlers(application)
+    
     # Add command handlers
     application.add_handler(CommandHandler('balansim', check_balance))
     application.add_handler(CommandHandler('qatnashishlarim', check_attendance))
@@ -1882,16 +2028,14 @@ def main():
     application.add_handler(CommandHandler('backup', backup_command))
     application.add_handler(CommandHandler('notify_all', notify_all_users))
     application.add_handler(CommandHandler('update_daily_prices', update_all_daily_prices))
-    application.add_handler(CommandHandler('change_name', change_user_name))
-
+    
     # Add message handlers for regular buttons
     application.add_handler(MessageHandler(filters.Regex("^💸 Balansim$"), check_balance))
     application.add_handler(MessageHandler(filters.Regex("^📊 Qatnashishlarim$"), check_attendance))
     application.add_handler(MessageHandler(filters.Regex("^❌ Tushlikni bekor qilish$"), cancel_lunch))
     application.add_handler(MessageHandler(filters.Regex("^❓ Yordam$"), help_command))
     application.add_handler(MessageHandler(filters.Regex("^👑 Admin panel$"), admin_panel_handler))
-    application.add_handler(MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change_admin))
-
+    
     # Add message handlers for admin buttons
     application.add_handler(MessageHandler(filters.Regex("^👥 Foydalanuvchilar$"), view_users))
     application.add_handler(MessageHandler(filters.Regex("^❌ Foydalanuvchini o'chirish$"), remove_user))
@@ -1901,16 +2045,15 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^📊 Bugungi qatnashuv$"), view_attendance_today_admin))
     application.add_handler(MessageHandler(filters.Regex("^🔄 Balanslarni nollash$"), reset_balance))
     application.add_handler(MessageHandler(filters.Regex("^💰 Kassa$"), view_kassa))
-    application.add_handler(MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change_admin))
     application.add_handler(MessageHandler(filters.Regex("^⬅️ Asosiy menyu$"), show_regular_keyboard))
-
+    
     # Add callback query handlers
     application.add_handler(CallbackQueryHandler(attendance_callback, pattern="^(attendance_|menu_)"))
     application.add_handler(CallbackQueryHandler(balance_reset_callback, pattern="^reset_all_balances_"))
     application.add_handler(CallbackQueryHandler(remove_user_callback, pattern="^remove_user_"))
     application.add_handler(CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_"))
     application.add_handler(CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_"))
-
+    
     # Schedule daily jobs
     job_queue = application.job_queue
     
@@ -1925,34 +2068,19 @@ def main():
         send_attendance_summary,
         time=datetime.time(10, 0, tzinfo=TASHKENT_TZ)
     )
-
+    
     # Low balance notification at 12:00 PM Tashkent time
     job_queue.run_daily(
         scheduled_low_balance_notification,
         time=datetime.time(12, 0, tzinfo=TASHKENT_TZ)
     )
-
-    # Add daily backup job
+    
+    # Daily backup at midnight
     job_queue.run_daily(
         daily_backup,
-        time=datetime.time(0, 0, tzinfo=TASHKENT_TZ)  # Run at midnight
+        time=datetime.time(0, 0, tzinfo=TASHKENT_TZ)
     )
-
-    # Add name change conversation handler for admin
-    name_change_admin_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^✏️ Ism o'zgartirish$"), start_name_change_admin)
-        ],
-        states={
-            "ADMIN_WAITING_FOR_NEW_NAME": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_admin_name_change)]
-        },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
-    )
-    application.add_handler(name_change_admin_conv)
     
-    # Add callback query handler for name change
-    application.add_handler(CallbackQueryHandler(admin_name_change_callback, pattern="^admin_change_name_"))
-
     # Start the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
