@@ -176,23 +176,23 @@ def is_admin(user_id, admins):
 def create_admin_keyboard():
     """Create keyboard for admin panel"""
     keyboard = [
-        [KeyboardButton("👥 Foydalanuvchilar"), KeyboardButton("📊 Statistika")],
-        [KeyboardButton("💰 Balans o'zgartirish"), KeyboardButton("📝 Tushlik menyusi")],
-        [KeyboardButton("📅 Bugungi kelishlar"), KeyboardButton("📊 Kassa")],
-        [KeyboardButton("🔙 Orqaga")]
+        [KeyboardButton("👥 Foydalanuvchilar"), KeyboardButton("❌ Foydalanuvchini o'chirish")],
+        [KeyboardButton("💵 Balans qo'shish"), KeyboardButton("💸 Balans kamaytirish")],
+        [KeyboardButton("📝 Kunlik narx"), KeyboardButton("📊 Bugungi qatnashuv")],
+        [KeyboardButton("🔄 Balanslarni nollash"), KeyboardButton("💰 Kassa")],
+        [KeyboardButton("❓ Yordam")],
+        [KeyboardButton("⬅️ Asosiy menyu")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-
 def create_regular_keyboard():
-    return ReplyKeyboardMarkup(
-        [
-            ["💸 Balansim", "📊 Qatnashishlarim"],
-            ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
-            ["❓ Yordam"],
-        ],
-        resize_keyboard=True,
-    )
+    """Create keyboard for regular users"""
+    keyboard = [
+        ["💸 Balansim", "📊 Qatnashishlarim"],
+        ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
+        ["❓ Yordam"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ---------------------- Registration and Name Change ---------------------- #
 
@@ -324,22 +324,38 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
             return
             
         data = await initialize_data()
+        updated_count = 0
+        failed_count = 0
         
-        # Update all users' daily prices
-        data = set_daily_price_for_all_users(data)
+        # Update each user's daily price
+        for user_id, user_data in data["users"].items():
+            try:
+                user_data["daily_price"] = 25000
+                db.update_user(user_id, user_data)
+                updated_count += 1
+            except Exception as e:
+                logger.error(f"Failed to update daily price for user {user_id}: {e}")
+                failed_count += 1
         
         # Save the changes
         await save_data(data)
         
         # Verify the changes
+        verification_failed = 0
         data = await initialize_data()  # Reload data to verify
-        zero_price_count = sum(1 for user in data["users"].values() 
-                             if "daily_price" not in user or user["daily_price"] == 0)
+        for user_id, user_data in data["users"].items():
+            if user_data.get("daily_price", 0) != 25000:
+                verification_failed += 1
         
-        if zero_price_count > 0:
-            await update.message.reply_text(f"⚠️ Diqqat: {zero_price_count} ta foydalanuvchining kunlik narxi hali ham 0 so'm!")
+        if verification_failed > 0:
+            await update.message.reply_text(
+                f"⚠️ Diqqat: {verification_failed} ta foydalanuvchining kunlik narxi to'g'ri saqlanmadi!"
+            )
         else:
-            await update.message.reply_text("✅ Barcha foydalanuvchilarning kunlik narxi 25,000 so'mga o'zgartirildi.")
+            await update.message.reply_text(
+                f"✅ {updated_count} ta foydalanuvchining kunlik narxi 25,000 so'mga o'zgartirildi.\n"
+                f"❌ {failed_count} ta foydalanuvchida xatolik yuz berdi."
+            )
             
     except Exception as e:
         logger.error(f"Error in update_all_daily_prices: {str(e)}")
@@ -355,76 +371,61 @@ async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return NAME_CHANGE
 
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Process name change"""
+    """Process name change for regular users"""
     try:
         user_id = str(update.effective_user.id)
         new_name = update.message.text.strip()
         
         if not new_name:
-            await update.message.reply_text(
-                "Ism bo'sh bo'lishi mumkin emas. Iltimos, qayta kiriting:",
-                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
-            )
-            return NAME
-        
+            await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
+            return NAME_CHANGE
+            
         # Get current data
         data = await initialize_data()
         if user_id not in data["users"]:
-            await update.message.reply_text(
-                "Siz ro'yxatdan o'tmagansiz. Iltimos, avval ro'yxatdan o'ting.",
-                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
-            )
-            return NAME
-        
+            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+            return ConversationHandler.END
+            
         # Store old name for confirmation message
         old_name = data["users"][user_id]["name"]
         
-        # Update name in database
+        # Update user data in database
         user_data = data["users"][user_id]
         user_data["name"] = new_name
         db.update_user(user_id, user_data)
         
-        # Update name in daily attendance if present
+        # Update daily attendance if present
         today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-        if today in data.get("daily_attendance", {}):
-            daily_data = data["daily_attendance"][today]
+        daily_attendance = db.get_daily_attendance(today)
+        if daily_attendance:
             for status in ["confirmed", "declined", "pending"]:
-                if user_id in daily_data.get(status, []):
-                    daily_data[status].remove(user_id)
-                    daily_data[status].append(user_id)
-                    db.update_daily_attendance(today, daily_data)
+                if user_id in daily_attendance.get(status, []):
+                    daily_attendance[status].remove(user_id)
+                    daily_attendance[status].append(user_id)
+            db.update_daily_attendance(today, daily_attendance)
         
-        # Update name in attendance history
-        for date, history in data.get("attendance_history", {}).items():
-            for status in ["confirmed", "declined"]:
-                if user_id in history.get(status, []):
-                    history[status].remove(user_id)
-                    history[status].append(user_id)
-                    db.update_attendance_history(date, history)
+        # Update attendance history
+        for date in data.get("attendance_history", {}):
+            history = db.get_attendance_history(date)
+            if history:
+                for status in ["confirmed", "declined"]:
+                    if user_id in history.get(status, []):
+                        history[status].remove(user_id)
+                        history[status].append(user_id)
+                db.update_attendance_history(date, history)
         
-        # Save all changes
-        if not await save_data(data):
+        # Verify the change
+        updated_user = db.get_user(user_id)
+        if not updated_user or updated_user.get("name") != new_name:
             await update.message.reply_text(
                 "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+                reply_markup=create_regular_keyboard()
             )
-            return NAME
+            return ConversationHandler.END
         
-        # Verify the change was saved
-        data = await initialize_data()
-        if data["users"][user_id]["name"] != new_name:
-            await update.message.reply_text(
-                "Ism o'zgartirish saqlanmadi. Iltimos, qayta urinib ko'ring.",
-                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
-            )
-            return NAME
-        
-        # Send confirmation message
         await update.message.reply_text(
-            f"Ismingiz muvaffaqiyatli o'zgartirildi!\n\n"
-            f"Eski ism: {old_name}\n"
-            f"Yangi ism: {new_name}",
-            reply_markup=create_main_keyboard()
+            f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
+            reply_markup=create_regular_keyboard()
         )
         return ConversationHandler.END
         
@@ -432,7 +433,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error in process_name_change: {str(e)}")
         await update.message.reply_text(
             "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-            reply_markup=create_main_keyboard()
+            reply_markup=create_regular_keyboard()
         )
         return ConversationHandler.END
 
@@ -538,9 +539,17 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
 
     # Calculate food statistics
     food_stats = {}
-    for user_id, dish in menu_choices.items():
-        if user_id in confirmed:  # Only count confirmed attendees
-            food_stats[dish] = food_stats.get(dish, 0) + 1
+    total_amount = 0
+    for user_id in confirmed:
+        if user_id in data["users"]:
+            # Use user's specific daily price
+            daily_price = data["users"][user_id].get("daily_price", 25000)
+            total_amount += daily_price
+            
+            # Track food choices
+            dish = menu_choices.get(user_id)
+            if dish:
+                food_stats[dish] = food_stats.get(dish, 0) + 1
 
     # Sort food choices by popularity
     sorted_foods = sorted(food_stats.items(), key=lambda x: x[1], reverse=True)
@@ -550,18 +559,18 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
     if confirmed:
         admin_summary += "👥 Qatnashuvchilar:\n"
         for user_id in confirmed:
-            name = data["users"].get(user_id, {}).get("name", "Noma'lum")
-            dish = menu_choices.get(user_id, "N/A")
-            dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
-            admin_summary += f"• {name} - {dish_name}\n"
+            if user_id in data["users"]:
+                name = data["users"][user_id]["name"]
+                daily_price = data["users"][user_id].get("daily_price", 25000)
+                dish = menu_choices.get(user_id, "N/A")
+                dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
+                admin_summary += f"• {name} - {dish_name} ({daily_price:,} so'm)\n"
         
         admin_summary += "\n📊 Ovqat tanlovlari statistikasi:\n"
         for dish, count in sorted_foods:
             dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
             admin_summary += f"• {dish_name}: {count} ta\n"
         
-        # Add total amount collected
-        total_amount = len(confirmed) * 25000
         admin_summary += f"\n💰 Jami yig'ilgan summa: {total_amount:,} so'm"
     else:
         admin_summary += "❌ Bugun tushlik qatnashuvchilar yo'q."
@@ -569,20 +578,25 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
     # Prepare user summary and deduct balances
     for user_id in confirmed:
         if user_id in data["users"]:
-            name = data["users"][user_id]["name"]
+            user_data = data["users"][user_id]
+            name = user_data["name"]
+            daily_price = user_data.get("daily_price", 25000)
             dish = menu_choices.get(user_id, "N/A")
             dish_name = MENU_OPTIONS.get(dish, "N/A") if dish != "N/A" else "N/A"
+            
             user_summary = f"🍽️ {today} - Tushlik qatnashuvchisi:\n\n"
             user_summary += f"• Siz: {name}\n"
             user_summary += f"• Tanlangan ovqat: {dish_name}\n"
             
             # Deduct balance and update kassa
-            old_balance = data["users"][user_id]["balance"]
-            data["users"][user_id]["balance"] -= 25000
-            data["kassa"] += 25000
+            old_balance = user_data["balance"]
+            user_data["balance"] -= daily_price
             
-            user_summary += f"• Hisobdan yechilgan summa: 25,000 so'm\n"
-            user_summary += f"• Yangi balans: {data['users'][user_id]['balance']:,} so'm"
+            # Update user in database
+            db.update_user(user_id, user_data)
+            
+            user_summary += f"• Hisobdan yechilgan summa: {daily_price:,} so'm\n"
+            user_summary += f"• Yangi balans: {user_data['balance']:,} so'm"
             
             try:
                 await context.bot.send_message(chat_id=user_id, text=user_summary)
@@ -751,28 +765,50 @@ async def balance_mod_select_user_callback(update: Update, context: ContextTypes
     return ADMIN_BALANCE_ENTER_AMOUNT
 
 async def balance_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process balance modification with database updates"""
     try:
         amount = int(update.message.text)
         if amount < 0:
             await update.message.reply_text("Iltimos, musbat raqam kiriting.")
             return ADMIN_BALANCE_ENTER_AMOUNT
+            
+        target_id = context.user_data.get("target_id")
+        if not target_id:
+            await update.message.reply_text("Foydalanuvchi ID topilmadi.")
+            return ConversationHandler.END
+            
+        # Get user from database
+        user_data = db.get_user(target_id)
+        if not user_data:
+            await update.message.reply_text("Foydalanuvchi topilmadi.")
+            return ConversationHandler.END
+            
+        old_balance = user_data.get("balance", 0)
+        new_balance = old_balance + amount if context.user_data.get("balance_action") == "add" else old_balance - amount
+        
+        # Update balance in database
+        user_data["balance"] = new_balance
+        db.update_user(target_id, user_data)
+        
+        # Verify the update
+        updated_user = db.get_user(target_id)
+        if not updated_user or updated_user.get("balance") != new_balance:
+            await update.message.reply_text("Balans o'zgartirishda xatolik yuz berdi.")
+            return ConversationHandler.END
+            
+        await update.message.reply_text(
+            f"{user_data['name']} ning balansi {old_balance:,} so'mdan {new_balance:,} so'mga o'zgartirildi.",
+            reply_markup=create_admin_keyboard()
+        )
+        return ConversationHandler.END
+        
     except ValueError:
         await update.message.reply_text("Iltimos, to'g'ri raqam kiriting.")
         return ADMIN_BALANCE_ENTER_AMOUNT
-    data = await initialize_data()
-    target_id = context.user_data.get("target_id")
-    if not target_id or target_id not in data["users"]:
-        await update.message.reply_text("Foydalanuvchi topilmadi.")
+    except Exception as e:
+        logger.error(f"Error in balance_mod_enter_amount: {str(e)}")
+        await update.message.reply_text("Balans o'zgartirishda xatolik yuz berdi.")
         return ConversationHandler.END
-    old_balance = data["users"][target_id]["balance"]
-    if context.user_data.get("balance_action") == "add":
-        new_balance = old_balance + amount
-    else:
-        new_balance = old_balance - amount
-    data["users"][target_id]["balance"] = new_balance
-    await save_data(data)
-    await update.message.reply_text(f"{data['users'][target_id]['name']} ning balansi {old_balance:,} so'mdan {new_balance:,} so'mga o'zgartirildi.")
-    return ConversationHandler.END
 
 async def cancel_balance_modification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Balans o'zgarishi bekor qilindi.")
@@ -818,23 +854,56 @@ async def daily_price_mod_select_user_callback(update: Update, context: ContextT
     return ADMIN_DAILY_PRICE_ENTER_AMOUNT
 
 async def daily_price_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process daily price modification with database updates"""
     try:
         price = int(update.message.text)
-        if price < 0:
-            await update.message.reply_text("Iltimos, musbat narx kiriting.")
+        if price <= 0:
+            await update.message.reply_text("Iltimos, musbat narx kiriting (0 dan katta).")
             return ADMIN_DAILY_PRICE_ENTER_AMOUNT
+            
+        target_id = context.user_data.get("price_target_id")
+        if not target_id:
+            await update.message.reply_text("Foydalanuvchi ID topilmadi.")
+            return ConversationHandler.END
+            
+        # Get user from database
+        user_data = db.get_user(target_id)
+        if not user_data:
+            await update.message.reply_text("Foydalanuvchi topilmadi.")
+            return ConversationHandler.END
+            
+        # Store old price for confirmation message
+        old_price = user_data.get("daily_price", 25000)
+        
+        # Update daily price in database
+        user_data["daily_price"] = price
+        db.update_user(target_id, user_data)
+        
+        # Verify the update
+        updated_user = db.get_user(target_id)
+        if not updated_user or updated_user.get("daily_price") != price:
+            await update.message.reply_text("Kunlik narx o'zgartirishda xatolik yuz berdi.")
+            return ConversationHandler.END
+            
+        # Update in local data
+        data = await initialize_data()
+        if target_id in data["users"]:
+            data["users"][target_id]["daily_price"] = price
+            await save_data(data)
+            
+        await update.message.reply_text(
+            f"{user_data['name']} ning kunlik narxi {old_price:,} so'mdan {price:,} so'mga o'zgartirildi.",
+            reply_markup=create_admin_keyboard()
+        )
+        return ConversationHandler.END
+        
     except ValueError:
         await update.message.reply_text("Iltimos, to'g'ri narx kiriting.")
         return ADMIN_DAILY_PRICE_ENTER_AMOUNT
-    data = await initialize_data()
-    target_id = context.user_data.get("price_target_id")
-    if not target_id or target_id not in data["users"]:
-        await update.message.reply_text("Foydalanuvchi topilmadi.")
+    except Exception as e:
+        logger.error(f"Error in daily_price_mod_enter_amount: {str(e)}")
+        await update.message.reply_text("Kunlik narx o'zgartirishda xatolik yuz berdi.")
         return ConversationHandler.END
-    data["users"][target_id]["daily_price"] = price
-    await save_data(data)
-    await update.message.reply_text(f"{data['users'][target_id]['name']} ning kunlik narxi {price:,} so'mga o'zgartirildi.")
-    return ConversationHandler.END
 
 async def cancel_daily_price_modification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Kunlik narx o'zgarishi bekor qilindi.")
