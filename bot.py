@@ -17,6 +17,7 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
+from db import db
 
 # Load environment variables from .env file
 load_dotenv()
@@ -68,24 +69,49 @@ MENU_OPTIONS = {
 
 # ---------------------- Data and Admin Initialization ---------------------- #
 
-def initialize_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    else:
-        data = {"users": {}, "daily_attendance": {}, "attendance_history": {}, "kassa": 0}
-    data.setdefault("users", {})
-    data.setdefault("daily_attendance", {})
-    data.setdefault("attendance_history", {})
-    data.setdefault("kassa", 0)
-    return data
+async def initialize_data():
+    """Initialize data from MongoDB"""
+    try:
+        users = {str(user["user_id"]): user for user in db.get_all_users()}
+        return {"users": users}
+    except Exception as e:
+        logger.error(f"Error initializing data: {str(e)}")
+        return {"users": {}}
 
+async def save_data(data):
+    """Save data to MongoDB"""
+    try:
+        for user_id, user_data in data["users"].items():
+            db.update_user(user_id, user_data)
+        return True
+    except Exception as e:
+        logger.error(f"Error saving data: {str(e)}")
+        return False
 
 def initialize_admins():
-    if os.path.exists(ADMIN_FILE):
-        with open(ADMIN_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"admins": []}
+    """Initialize admins from MongoDB"""
+    try:
+        admin_list = [str(admin["user_id"]) for admin in db.get_all_admins()]
+        return {"admins": admin_list}
+    except Exception as e:
+        logger.error(f"Error initializing admins: {str(e)}")
+        return {"admins": []}
+
+async def save_admins(admins):
+    """Save admins to MongoDB"""
+    try:
+        # First, remove all existing admins
+        current_admins = db.get_all_admins()
+        for admin in current_admins:
+            db.remove_admin(admin["user_id"])
+        
+        # Then add the new admins
+        for admin_id in admins["admins"]:
+            db.add_admin(admin_id)
+        return True
+    except Exception as e:
+        logger.error(f"Error saving admins: {str(e)}")
+        return False
 
 def set_daily_price_for_all_users(data, price=25000):
     """Set daily price for all users to the specified amount"""
@@ -182,7 +208,7 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
-    data = initialize_data()
+    data = await initialize_data()
     admins = initialize_admins()
     
     if user_id in data["users"]:
@@ -236,7 +262,7 @@ async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return NAME
             
         uid = str(update.effective_user.id)
-        data = initialize_data()
+        data = await initialize_data()
         
         if uid not in data["users"]:
             await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
@@ -278,7 +304,7 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("Siz admin emassiz.")
             return
             
-        data = initialize_data()
+        data = await initialize_data()
         
         # Update all users' daily prices
         data = set_daily_price_for_all_users(data)
@@ -287,7 +313,7 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
         await save_data(data)
         
         # Verify the changes
-        data = initialize_data()  # Reload data to verify
+        data = await initialize_data()  # Reload data to verify
         zero_price_count = sum(1 for user in data["users"].values() 
                              if "daily_price" not in user or user["daily_price"] == 0)
         
@@ -302,7 +328,7 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
 
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
-    data = initialize_data()
+    data = await initialize_data()
     if user_id not in data["users"]:
         await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
         return ConversationHandler.END
@@ -317,7 +343,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
             return NAME_CHANGE
             
         uid = str(update.effective_user.id)
-        data = initialize_data()
+        data = await initialize_data()
         
         if uid not in data["users"]:
             await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
@@ -357,7 +383,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
         await save_data(data)
         
         # Verify the changes were saved
-        data = initialize_data()  # Reload data to verify
+        data = await initialize_data()  # Reload data to verify
         if data["users"][uid]["name"] != new_name:
             logger.error(f"Name change not saved properly for user {uid}")
             await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
@@ -385,7 +411,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         uid = str(update.effective_user.id)
-        data = initialize_data()
+        data = await initialize_data()
         
         if uid not in data["users"]:
             await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
@@ -406,7 +432,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
             return NAME_CHANGE
             
         uid = str(update.effective_user.id)
-        data = initialize_data()
+        data = await initialize_data()
         
         if uid not in data["users"]:
             await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
@@ -440,7 +466,7 @@ async def send_attendance_request(context: ContextTypes.DEFAULT_TYPE, test: bool
     now = datetime.datetime.now(TASHKENT_TZ)
     if not test and now.weekday() >= 5:
         return
-    data = initialize_data()
+    data = await initialize_data()
     today = now.strftime("%Y-%m-%d")
     if today not in data["daily_attendance"]:
         data["daily_attendance"][today] = {"confirmed": [], "declined": [], "pending": [], "menu": {}}
@@ -471,7 +497,7 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.datetime.now(TASHKENT_TZ)
     if now.weekday() >= 5:  # Skip weekends
         return
-    data = initialize_data()
+    data = await initialize_data()
     admins = initialize_admins()
     today = now.strftime("%Y-%m-%d")
     if today not in data["daily_attendance"]:
@@ -553,7 +579,7 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
 async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = initialize_data()
+    data = await initialize_data()
     uid = str(query.from_user.id)
     callback = query.data
     if callback.startswith("attendance_"):
@@ -610,7 +636,7 @@ async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Tushlikni bekor qilish muddati o'tib ketdi.")
         return
     today = now.strftime("%Y-%m-%d")
-    data = initialize_data()
+    data = await initialize_data()
     if today not in data["daily_attendance"]:
         await update.message.reply_text("Bugun uchun tushlik ma'lumotlari topilmadi.")
         return
@@ -644,7 +670,7 @@ async def start_balance_modification(update: Update, context: ContextTypes.DEFAU
             await update.message.reply_text("Noto'g'ri amal.")
             return ConversationHandler.END
             
-        data = initialize_data()
+        data = await initialize_data()
         if not data["users"]:
             await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
             return ConversationHandler.END
@@ -685,7 +711,7 @@ async def balance_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT
     except ValueError:
         await update.message.reply_text("Iltimos, to'g'ri raqam kiriting.")
         return ADMIN_BALANCE_ENTER_AMOUNT
-    data = initialize_data()
+    data = await initialize_data()
     target_id = context.user_data.get("target_id")
     if not target_id or target_id not in data["users"]:
         await update.message.reply_text("Foydalanuvchi topilmadi.")
@@ -714,7 +740,7 @@ async def start_daily_price_modification(update: Update, context: ContextTypes.D
             await update.message.reply_text("Siz admin emassiz.")
             return
             
-        data = initialize_data()
+        data = await initialize_data()
         if not data["users"]:
             await update.message.reply_text("Foydalanuvchilar ro'yxati bo'sh.")
             return ConversationHandler.END
@@ -752,7 +778,7 @@ async def daily_price_mod_enter_amount(update: Update, context: ContextTypes.DEF
     except ValueError:
         await update.message.reply_text("Iltimos, to'g'ri narx kiriting.")
         return ADMIN_DAILY_PRICE_ENTER_AMOUNT
-    data = initialize_data()
+    data = await initialize_data()
     target_id = context.user_data.get("price_target_id")
     if not target_id or target_id not in data["users"]:
         await update.message.reply_text("Foydalanuvchi topilmadi.")
@@ -771,7 +797,7 @@ async def cancel_daily_price_modification(update: Update, context: ContextTypes.
 # General user: Check balance
 async def check_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    data = initialize_data()
+    data = await initialize_data()
     if uid not in data["users"]:
         await update.message.reply_text("Siz ro'yxatdan o'tmagansiz. /start buyrug'ini yuboring.")
         return
@@ -782,7 +808,7 @@ async def check_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # General user: Attendance history
 async def check_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    data = initialize_data()
+    data = await initialize_data()
     if uid not in data["users"]:
         await update.message.reply_text("Siz ro'yxatdan o'tmagansiz. /start buyrug'ini yuboring.")
         return
@@ -804,7 +830,7 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Siz admin emassiz.")
             return
             
-        data = initialize_data()
+        data = await initialize_data()
         if not data["users"]:
             await update.message.reply_text("Hozircha foydalanuvchilar mavjud emas.")
             return
@@ -851,7 +877,7 @@ async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFA
     try:
         uid = str(update.effective_user.id)
         admins = initialize_admins()
-        data = initialize_data()
+        data = await initialize_data()
         
         if uid not in admins["admins"]:
             await update.message.reply_text("Siz admin emassiz.")
@@ -906,7 +932,7 @@ async def view_attendance_today_admin(update: Update, context: ContextTypes.DEFA
 async def view_all_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     admins = initialize_admins()
-    data = initialize_data()
+    data = await initialize_data()
     if uid not in admins["admins"]:
         await update.message.reply_text("Siz admin emassiz.")
         return
@@ -930,7 +956,7 @@ async def view_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Siz admin emassiz.")
             return
             
-        data = initialize_data()
+        data = await initialize_data()
         
         # Calculate total balance from all users
         total_balance = sum(user.get("balance", 0) for user in data["users"].values())
@@ -979,7 +1005,7 @@ async def balance_reset_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     uid = str(query.from_user.id)
     admins = initialize_admins()
-    data = initialize_data()
+    data = await initialize_data()
     if uid not in admins["admins"]:
         await query.edit_message_text("Siz admin emassiz.")
         return
@@ -1010,7 +1036,7 @@ async def make_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if new_admin in admins["admins"]:
             await update.message.reply_text("Bu foydalanuvchi allaqachon admin.")
             return
-        data = initialize_data()
+        data = await initialize_data()
         if new_admin not in data["users"]:
             await update.message.reply_text("Bu foydalanuvchi topilmadi.")
             return
@@ -1057,7 +1083,7 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in admins["admins"]:
         await update.message.reply_text("Siz admin emassiz.")
         return
-    data = initialize_data()
+    data = await initialize_data()
     exp = {
         "users": {},
         "total_balance": 0,
@@ -1081,7 +1107,7 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------- Low Balance Notification ---------------------- #
 
 async def send_low_balance_notifications(context: ContextTypes.DEFAULT_TYPE):
-    data = initialize_data()
+    data = await initialize_data()
     today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
     for user_id, info in data["users"].items():
         if info["balance"] < 100000:
@@ -1104,7 +1130,7 @@ async def remind_debtors(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in admins["admins"]:
         await update.message.reply_text("Siz admin emassiz.")
         return
-    data = initialize_data()
+    data = await initialize_data()
     debtors = [(uid, info) for uid, info in data["users"].items() if info["balance"] < 100000]
     if not debtors:
         await update.message.reply_text("Hech kimda balans muammosi yo'q.")
@@ -1212,7 +1238,7 @@ async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = str(update.effective_user.id)
         admins = initialize_admins()
-        data = initialize_data()
+        data = await initialize_data()
         
         # Check if user is admin
         if uid not in admins["admins"]:
@@ -1252,7 +1278,7 @@ async def remove_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # Get user ID from callback data
         target_id = query.data.split("_")[2]
-        data = initialize_data()
+        data = await initialize_data()
         
         if target_id not in data["users"]:
             await query.edit_message_text("Foydalanuvchi topilmadi.")
