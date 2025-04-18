@@ -389,20 +389,31 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Store old name for confirmation message
         old_name = data["users"][user_id]["name"]
         
-        # Update user data in database
+        # Update user data in database first
         user_data = data["users"][user_id]
         user_data["name"] = new_name
-        db.update_user(user_id, user_data)
+        db_result = db.update_user(user_id, user_data)
+        
+        if not db_result.acknowledged:
+            logger.error(f"Database update failed for user {user_id}")
+            await update.message.reply_text(
+                "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+                reply_markup=create_regular_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Update local data
+        data["users"][user_id]["name"] = new_name
         
         # Update daily attendance if present
         today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-        daily_attendance = db.get_daily_attendance(today)
-        if daily_attendance:
+        if today in data.get("daily_attendance", {}):
+            daily_data = data["daily_attendance"][today]
             for status in ["confirmed", "declined", "pending"]:
-                if user_id in daily_attendance.get(status, []):
-                    daily_attendance[status].remove(user_id)
-                    daily_attendance[status].append(user_id)
-            db.update_daily_attendance(today, daily_attendance)
+                if user_id in daily_data.get(status, []):
+                    daily_data[status].remove(user_id)
+                    daily_data[status].append(user_id)
+            db.update_daily_attendance(today, daily_data)
         
         # Update attendance history
         for date in data.get("attendance_history", {}):
@@ -414,9 +425,13 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
                         history[status].append(user_id)
                 db.update_attendance_history(date, history)
         
-        # Verify the change
+        # Save local data changes
+        await save_data(data)
+        
+        # Verify the change in database
         updated_user = db.get_user(user_id)
         if not updated_user or updated_user.get("name") != new_name:
+            logger.error(f"Name change verification failed for user {user_id}")
             await update.message.reply_text(
                 "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
                 reply_markup=create_regular_keyboard()
