@@ -17,15 +17,133 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
-from db import db
+from database_manager import db_manager
+import re
+from functools import wraps
+from typing import Callable, Any, Optional
+from backup_manager import backup_manager
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Get bot token from environment variable
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable not found!")
+# Configure logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+def validate_input(update: Update, validation_type: str) -> tuple[bool, str]:
+    """Validate user input based on type"""
+    if not update.message or not update.message.text:
+        return False, "Invalid input"
+        
+    text = update.message.text.strip()
+    
+    if validation_type == "name":
+        if not text or len(text) < 2:
+            return False, "Ism kamida 2 ta belgidan iborat bo'lishi kerak"
+        if len(text) > 50:
+            return False, "Ism juda uzun"
+        if not re.match(r'^[a-zA-Z\s\']+$', text):
+            return False, "Ism faqat harflardan iborat bo'lishi kerak"
+            
+    elif validation_type == "phone":
+        if not re.match(r'^\+?[0-9]{10,15}$', text):
+            return False, "Noto'g'ri telefon raqam formati"
+            
+    elif validation_type == "amount":
+        try:
+            amount = int(text)
+            if amount <= 0:
+                return False, "Summa musbat son bo'lishi kerak"
+        except ValueError:
+            return False, "Summa raqam bo'lishi kerak"
+            
+    return True, ""
+
+def error_handler(validation_type: Optional[str] = None):
+    """Enhanced error handler decorator with input validation"""
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs) -> Any:
+            try:
+                # Input validation if specified
+                if validation_type and update.message:
+                    is_valid, error_message = validate_input(update, validation_type)
+                    if not is_valid:
+                        await update.message.reply_text(f"Xatolik: {error_message}")
+                        return ConversationHandler.END
+                
+                # Execute the function
+                return await func(update, context, *args, **kwargs)
+                
+            except ValueError as ve:
+                error_msg = f"Qiymat xatosi: {str(ve)}"
+                logger.error(f"Value error in {func.__name__}: {str(ve)}")
+                
+            except Exception as e:
+                error_msg = "Tizimda xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+                logger.error(f"Error in {func.__name__}: {str(e)}", exc_info=True)
+                
+            if update.callback_query:
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_text(error_msg)
+            elif update.message:
+                await update.message.reply_text(error_msg)
+                
+            return ConversationHandler.END
+            
+        return wrapper
+    return decorator
+
+def admin_required(func: Callable) -> Callable:
+    """Decorator to check if user is admin"""
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs) -> Any:
+        user_id = str(update.effective_user.id)
+        admins = initialize_admins()
+        
+        if user_id not in admins["admins"]:
+            await update.message.reply_text("Siz admin emassiz.")
+            return ConversationHandler.END
+            
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+def rate_limit(calls: int, period: int):
+    """Rate limiting decorator"""
+    def decorator(func: Callable) -> Callable:
+        calls_dict = {}
+        
+        @wraps(func)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs) -> Any:
+            user_id = str(update.effective_user.id)
+            current_time = datetime.datetime.now().timestamp()
+            
+            # Initialize user's call history
+            if user_id not in calls_dict:
+                calls_dict[user_id] = []
+            
+            # Remove old calls
+            calls_dict[user_id] = [
+                call_time for call_time in calls_dict[user_id]
+                if current_time - call_time < period
+            ]
+            
+            # Check rate limit
+            if len(calls_dict[user_id]) >= calls:
+                await update.message.reply_text(
+                    f"Iltimos, {period} soniya kutib turing."
+                )
+                return ConversationHandler.END
+                
+            # Add new call
+            calls_dict[user_id].append(current_time)
+            
+            return await func(update, context, *args, **kwargs)
+        return wrapper
+    return decorator
 
 # ---------------------- Configuration and Global Variables ---------------------- #
 
@@ -48,10 +166,6 @@ ADMIN_BALANCE_SELECT_USER, ADMIN_BALANCE_ENTER_AMOUNT = range(100, 102)
 # Conversation states for admin daily price adjustment (set user's daily price)
 ADMIN_DAILY_PRICE_SELECT_USER, ADMIN_DAILY_PRICE_ENTER_AMOUNT = range(102, 104)
 
-# File paths
-DATA_FILE = "data.json"
-ADMIN_FILE = "admins.json"
-
 # Global lunch menu options mapping (menu option number -> dish name)
 MENU_OPTIONS = {
     "1": "Qovurma Lag'mon",
@@ -72,17 +186,29 @@ MENU_OPTIONS = {
 async def initialize_data():
     """Initialize data from MongoDB"""
     try:
-        users = {str(user["user_id"]): user for user in db.get_all_users()}
-        return {"users": users}
+        users = {str(user["user_id"]): user for user in db_manager.get_all_users()}
+        daily_attendance = db_manager.get_daily_attendance(datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")) or {}
+        return {
+            "users": users,
+            "daily_attendance": {
+                datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d"): daily_attendance
+            }
+        }
     except Exception as e:
         logger.error(f"Error initializing data: {str(e)}")
-        return {"users": {}}
+        return {"users": {}, "daily_attendance": {}}
 
 async def save_data(data):
     """Save data to MongoDB"""
     try:
+        # Update users
         for user_id, user_data in data["users"].items():
-            db.update_user(user_id, user_data)
+            db_manager.update_user(user_id, user_data)
+        
+        # Update daily attendance
+        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+        if today in data["daily_attendance"]:
+            db_manager.update_daily_attendance(today, data["daily_attendance"][today])
         return True
     except Exception as e:
         logger.error(f"Error saving data: {str(e)}")
@@ -91,7 +217,7 @@ async def save_data(data):
 def initialize_admins():
     """Initialize admins from MongoDB"""
     try:
-        admin_list = [str(admin["user_id"]) for admin in db.get_all_admins()]
+        admin_list = [str(admin["user_id"]) for admin in db_manager.get_all_admins()]
         return {"admins": admin_list}
     except Exception as e:
         logger.error(f"Error initializing admins: {str(e)}")
@@ -101,13 +227,13 @@ async def save_admins(admins):
     """Save admins to MongoDB"""
     try:
         # First, remove all existing admins
-        current_admins = db.get_all_admins()
+        current_admins = db_manager.get_all_admins()
         for admin in current_admins:
-            db.remove_admin(admin["user_id"])
+            db_manager.remove_admin(admin["user_id"])
         
         # Then add the new admins
         for admin_id in admins["admins"]:
-            db.add_admin(admin_id)
+            db_manager.add_admin(admin_id)
         return True
     except Exception as e:
         logger.error(f"Error saving admins: {str(e)}")
@@ -177,10 +303,9 @@ def create_admin_keyboard():
     """Create keyboard for admin panel"""
     keyboard = [
         [KeyboardButton("👥 Foydalanuvchilar"), KeyboardButton("❌ Foydalanuvchini o'chirish")],
-        [KeyboardButton("💵 Balans qo'shish"), KeyboardButton("💸 Balans kamaytirish")],
+        [KeyboardButton("💳 Balans qo'shish"), KeyboardButton("💸 Balans kamaytirish")],
         [KeyboardButton("📝 Kunlik narx"), KeyboardButton("📊 Bugungi qatnashuv")],
         [KeyboardButton("🔄 Balanslarni nollash"), KeyboardButton("💰 Kassa")],
-        [KeyboardButton("❓ Yordam")],
         [KeyboardButton("⬅️ Asosiy menyu")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -331,7 +456,7 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
         for user_id, user_data in data["users"].items():
             try:
                 user_data["daily_price"] = 25000
-                db.update_user(user_id, user_data)
+                db_manager.update_user(user_id, user_data)
                 updated_count += 1
             except Exception as e:
                 logger.error(f"Failed to update daily price for user {user_id}: {e}")
@@ -362,13 +487,21 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Kunlik narxlarni yangilashda xatolik yuz berdi.")
 
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = str(update.effective_user.id)
-    data = await initialize_data()
-    if user_id not in data["users"]:
-        await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+    """Start name change process for regular users"""
+    try:
+        user_id = str(update.effective_user.id)
+        user = db_manager.get_user(user_id)
+        
+        if not user:
+            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
+            return ConversationHandler.END
+        
+        await update.message.reply_text("Yangi ismingizni kiriting:")
+        return NAME_CHANGE
+    except Exception as e:
+        logger.error(f"Error in start_name_change: {str(e)}")
+        await update.message.reply_text("Ism o'zgartirish boshlanishida xatolik yuz berdi.")
         return ConversationHandler.END
-    await update.message.reply_text("Yangi ismingizni kiriting:")
-    return NAME_CHANGE
 
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Process name change for regular users"""
@@ -379,49 +512,24 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not new_name:
             await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
             return NAME_CHANGE
-            
-        # Get current data
-        data = await initialize_data()
-        if user_id not in data["users"]:
+        
+        # Get user from database
+        user = db_manager.get_user(user_id)
+        if not user:
             await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
             return ConversationHandler.END
-            
-        # Store old name for confirmation message
-        old_name = data["users"][user_id]["name"]
         
-        # Update user data in database
-        user_data = data["users"][user_id]
-        user_data["name"] = new_name
-        db.update_user(user_id, user_data)
+        old_name = user.get("name", "")
+        user["name"] = new_name
         
-        # Update daily attendance if present
+        # Update user in database
+        db_manager.update_user(user_id, user)
+        
+        # Update name in daily attendance if present
         today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-        daily_attendance = db.get_daily_attendance(today)
+        daily_attendance = db_manager.get_daily_attendance(today)
         if daily_attendance:
-            for status in ["confirmed", "declined", "pending"]:
-                if user_id in daily_attendance.get(status, []):
-                    daily_attendance[status].remove(user_id)
-                    daily_attendance[status].append(user_id)
-            db.update_daily_attendance(today, daily_attendance)
-        
-        # Update attendance history
-        for date in data.get("attendance_history", {}):
-            history = db.get_attendance_history(date)
-            if history:
-                for status in ["confirmed", "declined"]:
-                    if user_id in history.get(status, []):
-                        history[status].remove(user_id)
-                        history[status].append(user_id)
-                db.update_attendance_history(date, history)
-        
-        # Verify the change
-        updated_user = db.get_user(user_id)
-        if not updated_user or updated_user.get("name") != new_name:
-            await update.message.reply_text(
-                "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-                reply_markup=create_regular_keyboard()
-            )
-            return ConversationHandler.END
+            db_manager.update_daily_attendance(today, daily_attendance)
         
         await update.message.reply_text(
             f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
@@ -431,10 +539,7 @@ async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     except Exception as e:
         logger.error(f"Error in process_name_change: {str(e)}")
-        await update.message.reply_text(
-            "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-            reply_markup=create_regular_keyboard()
-        )
+        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi.")
         return ConversationHandler.END
 
 # Allow users to change their name via button
@@ -593,7 +698,7 @@ async def send_attendance_summary(context: ContextTypes.DEFAULT_TYPE):
             user_data["balance"] -= daily_price
             
             # Update user in database
-            db.update_user(user_id, user_data)
+            db_manager.update_user(user_id, user_data)
             
             user_summary += f"• Hisobdan yechilgan summa: {daily_price:,} so'm\n"
             user_summary += f"• Yangi balans: {user_data['balance']:,} so'm"
@@ -721,10 +826,10 @@ async def start_balance_modification(update: Update, context: ContextTypes.DEFAU
         
         if uid not in admins["admins"]:
             await update.message.reply_text("Siz admin emassiz.")
-            return
+            return ConversationHandler.END
             
         action_text = update.message.text
-        if action_text == "💵 Balans qo'shish":
+        if action_text == "💳 Balans qo'shish":
             context.user_data["balance_action"] = "add"
         elif action_text == "💸 Balans kamaytirish":
             context.user_data["balance_action"] = "subtract"
@@ -742,7 +847,10 @@ async def start_balance_modification(update: Update, context: ContextTypes.DEFAU
             button = InlineKeyboardButton(f"{info['name']} ({uid})", callback_data=f"balance_mod_{uid}")
             kb.append([button])
             
-        await update.message.reply_text("Iltimos, foydalanuvchini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text(
+            "Iltimos, foydalanuvchini tanlang:", 
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
         return ADMIN_BALANCE_SELECT_USER
     except Exception as e:
         logger.error(f"Error in start_balance_modification: {str(e)}")
@@ -778,7 +886,7 @@ async def balance_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT
             return ConversationHandler.END
             
         # Get user from database
-        user_data = db.get_user(target_id)
+        user_data = db_manager.get_user(target_id)
         if not user_data:
             await update.message.reply_text("Foydalanuvchi topilmadi.")
             return ConversationHandler.END
@@ -788,10 +896,10 @@ async def balance_mod_enter_amount(update: Update, context: ContextTypes.DEFAULT
         
         # Update balance in database
         user_data["balance"] = new_balance
-        db.update_user(target_id, user_data)
+        db_manager.update_user(target_id, user_data)
         
         # Verify the update
-        updated_user = db.get_user(target_id)
+        updated_user = db_manager.get_user(target_id)
         if not updated_user or updated_user.get("balance") != new_balance:
             await update.message.reply_text("Balans o'zgartirishda xatolik yuz berdi.")
             return ConversationHandler.END
@@ -867,7 +975,7 @@ async def daily_price_mod_enter_amount(update: Update, context: ContextTypes.DEF
             return ConversationHandler.END
             
         # Get user from database
-        user_data = db.get_user(target_id)
+        user_data = db_manager.get_user(target_id)
         if not user_data:
             await update.message.reply_text("Foydalanuvchi topilmadi.")
             return ConversationHandler.END
@@ -877,10 +985,10 @@ async def daily_price_mod_enter_amount(update: Update, context: ContextTypes.DEF
         
         # Update daily price in database
         user_data["daily_price"] = price
-        db.update_user(target_id, user_data)
+        db_manager.update_user(target_id, user_data)
         
         # Verify the update
-        updated_user = db.get_user(target_id)
+        updated_user = db_manager.get_user(target_id)
         if not updated_user or updated_user.get("daily_price") != price:
             await update.message.reply_text("Kunlik narx o'zgartirishda xatolik yuz berdi.")
             return ConversationHandler.END
@@ -1587,50 +1695,153 @@ async def verify_backup(backup_path: str) -> bool:
         logger.error(f"Backup verification failed: {e}")
         return False
 
+@admin_required
+@error_handler()
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the backup command with verification"""
-    uid = str(update.effective_user.id)
-    admins = initialize_admins()
-    
-    if uid not in admins["admins"]:
-        await update.message.reply_text("Siz admin emassiz.")
-        return
-    
-    await update.message.reply_text("Ma'lumotlarni zaxiralash boshlandi...")
-    
+    """Handle the backup command with encryption and compression"""
     try:
-        # Create backup
-        backup_files = await create_backup()
+        await update.message.reply_text("Ma'lumotlarni zaxiralash boshlandi...")
         
-        # Verify backups
-        verification_results = []
-        for backup_file in backup_files:
-            is_valid = await verify_backup(backup_file)
-            verification_results.append((backup_file, is_valid))
+        backup_file = await backup_manager.create_backup()
+        if not backup_file:
+            await update.message.reply_text("Zaxira nusxasi yaratishda xatolik yuz berdi.")
+            return
+            
+        # Verify the backup
+        if not backup_manager.verify_backup_file(backup_file):
+            await update.message.reply_text("Zaxira nusxasi yaratildi, lekin tekshirishda xatolik yuz berdi.")
+            return
+            
+        # Get backup details
+        backups = backup_manager.list_backups()
+        current_backup = next((b for b in backups if b["filename"] == backup_file), None)
         
-        # Prepare status message
-        status_message = "Zaxira nusxalari holati:\n\n"
-        for file_path, is_valid in verification_results:
-            file_name = os.path.basename(file_path)
-            status = "✅" if is_valid else "❌"
-            status_message += f"{status} {file_name}\n"
+        if current_backup:
+            await update.message.reply_text(
+                f"✅ Zaxira nusxasi muvaffaqiyatli yaratildi:\n\n"
+                f"📁 Fayl: {current_backup['filename']}\n"
+                f"📊 Hajmi: {current_backup['size']}\n"
+                f"🕒 Sana: {current_backup['created']}"
+            )
+        else:
+            await update.message.reply_text("✅ Zaxira nusxasi yaratildi.")
+            
+    except Exception as e:
+        logger.error(f"Backup command failed: {e}")
+        await update.message.reply_text(f"Zaxira nusxasi yaratishda xatolik yuz berdi: {str(e)}")
+
+@admin_required
+@error_handler()
+async def list_backups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all available backups"""
+    try:
+        backups = backup_manager.list_backups()
+        if not backups:
+            await update.message.reply_text("Mavjud zaxira nusxalari topilmadi.")
+            return
+            
+        message = "📋 Mavjud zaxira nusxalari:\n\n"
+        for backup in backups:
+            message += (
+                f"📁 {backup['filename']}\n"
+                f"📊 Hajmi: {backup['size']}\n"
+                f"🕒 Sana: {backup['created']}\n"
+                f"────────────────────\n"
+            )
+            
+        await update.message.reply_text(message)
         
-        await update.message.reply_text(status_message)
+    except Exception as e:
+        logger.error(f"List backups command failed: {e}")
+        await update.message.reply_text("Zaxira nusxalarini ko'rsatishda xatolik yuz berdi.")
+
+@admin_required
+@error_handler()
+async def restore_backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Restore from a backup file"""
+    try:
+        if not context.args:
+            await update.message.reply_text(
+                "Iltimos, zaxira nusxasi faylini ko'rsating.\n"
+                "Mavjud fayllarni ko'rish uchun /list_backups buyrug'ini ishating."
+            )
+            return
+            
+        backup_file = context.args[0]
+        if not backup_manager.verify_backup_file(backup_file):
+            await update.message.reply_text("Noto'g'ri yoki buzilgan zaxira nusxasi fayli.")
+            return
+            
+        await update.message.reply_text("Zaxira nusxasidan tiklash boshlandi...")
         
-        # If any backup failed verification, notify admins
-        if not all(is_valid for _, is_valid in verification_results):
+        if await backup_manager.restore_from_backup(backup_file):
+            await update.message.reply_text("✅ Ma'lumotlar muvaffaqiyatli tiklandi.")
+        else:
+            await update.message.reply_text("❌ Ma'lumotlarni tiklashda xatolik yuz berdi.")
+            
+    except Exception as e:
+        logger.error(f"Restore command failed: {e}")
+        await update.message.reply_text("Ma'lumotlarni tiklashda xatolik yuz berdi.")
+
+# Update the daily backup job
+async def daily_backup(context: ContextTypes.DEFAULT_TYPE):
+    """Create a daily backup at midnight"""
+    try:
+        logger.info("Starting daily backup...")
+        backup_file = await backup_manager.create_backup()
+        
+        if backup_file and backup_manager.verify_backup_file(backup_file):
+            logger.info("Daily backup completed successfully")
+            
+            # Notify all admins
+            admins = initialize_admins()
+            for admin_id in admins["admins"]:
+                try:
+                    backups = backup_manager.list_backups()
+                    current_backup = next((b for b in backups if b["filename"] == backup_file), None)
+                    
+                    if current_backup:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=(
+                                "✅ Kunlik zaxira nusxasi yaratildi:\n\n"
+                                f"📁 Fayl: {current_backup['filename']}\n"
+                                f"📊 Hajmi: {current_backup['size']}\n"
+                                f"🕒 Sana: {current_backup['created']}"
+                            )
+                        )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text="✅ Kunlik zaxira nusxasi yaratildi."
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id}: {e}")
+        else:
+            logger.error("Daily backup failed verification")
+            # Notify admins about backup failure
+            admins = initialize_admins()
             for admin_id in admins["admins"]:
                 try:
                     await context.bot.send_message(
                         chat_id=admin_id,
-                        text="⚠️ Diqqat: Ba'zi zaxira nusxalari noto'g'ri yaratildi!"
+                        text="❌ Kunlik zaxira nusxasi yaratishda xatolik yuz berdi!"
                     )
                 except Exception as e:
                     logger.error(f"Failed to notify admin {admin_id}: {e}")
                     
     except Exception as e:
-        logger.error(f"Backup command failed: {e}")
-        await update.message.reply_text(f"Zaxira nusxasi yaratishda xatolik yuz berdi: {e}")
+        logger.error(f"Daily backup failed: {e}")
+        # Notify admins about backup failure
+        admins = initialize_admins()
+        for admin_id in admins["admins"]:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"❌ Kunlik zaxira nusxasi yaratishda xatolik yuz berdi: {str(e)}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin_id}: {e}")
 
 # ---------------------- Add this function before the main function
 async def notify_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1997,6 +2208,46 @@ def setup_conversation_handlers(application):
     # Add other handlers...
     # ... existing code ...
 
+    # Add balance modification handler
+    balance_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                filters.Regex("^(💳 Balans qo'shish|💸 Balans kamaytirish)$"), 
+                start_balance_modification
+            )
+        ],
+        states={
+            ADMIN_BALANCE_SELECT_USER: [
+                CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_")
+            ],
+            ADMIN_BALANCE_ENTER_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, balance_mod_enter_amount)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_balance_modification)]
+    )
+    application.add_handler(balance_conv)
+    
+    # Add daily price modification handler
+    daily_price_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                filters.Regex("^📝 Kunlik narx$"), 
+                start_daily_price_modification
+            )
+        ],
+        states={
+            ADMIN_DAILY_PRICE_SELECT_USER: [
+                CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_")
+            ],
+            ADMIN_DAILY_PRICE_ENTER_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, daily_price_mod_enter_amount)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_daily_price_modification)]
+    )
+    application.add_handler(daily_price_conv)
+
 # Update the main function to use the new setup
 def main():
     # Create the Application and pass it your bot's token
@@ -2028,6 +2279,8 @@ def main():
     application.add_handler(CommandHandler('backup', backup_command))
     application.add_handler(CommandHandler('notify_all', notify_all_users))
     application.add_handler(CommandHandler('update_daily_prices', update_all_daily_prices))
+    application.add_handler(CommandHandler('list_backups', list_backups_command))
+    application.add_handler(CommandHandler('restore', restore_backup_command))
     
     # Add message handlers for regular buttons
     application.add_handler(MessageHandler(filters.Regex("^💸 Balansim$"), check_balance))
@@ -2039,7 +2292,7 @@ def main():
     # Add message handlers for admin buttons
     application.add_handler(MessageHandler(filters.Regex("^👥 Foydalanuvchilar$"), view_users))
     application.add_handler(MessageHandler(filters.Regex("^❌ Foydalanuvchini o'chirish$"), remove_user))
-    application.add_handler(MessageHandler(filters.Regex("^💵 Balans qo'shish$"), start_balance_modification))
+    application.add_handler(MessageHandler(filters.Regex("^💳 Balans qo'shish$"), start_balance_modification))
     application.add_handler(MessageHandler(filters.Regex("^💸 Balans kamaytirish$"), start_balance_modification))
     application.add_handler(MessageHandler(filters.Regex("^📝 Kunlik narx$"), start_daily_price_modification))
     application.add_handler(MessageHandler(filters.Regex("^📊 Bugungi qatnashuv$"), view_attendance_today_admin))
