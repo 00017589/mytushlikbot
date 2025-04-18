@@ -364,175 +364,69 @@ async def update_all_daily_prices(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Kunlik narxlarni yangilashda xatolik yuz berdi.")
 
 async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start the name change process for both regular users and admins"""
+    """Start the name change process"""
     try:
         uid = str(update.effective_user.id)
         data = await initialize_data()
-        admins = initialize_admins()
         
-        # Check if user exists
         if uid not in data["users"]:
             await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
             return ConversationHandler.END
-            
-        # If admin is using the admin panel button
-        if uid in admins["admins"] and update.message.text == "✏️ Ism o'zgartirish":
-            # Create keyboard with user buttons
-            keyboard = []
-            for user_id, info in data["users"].items():
-                name = info.get("name", "Noma'lum")
-                button = InlineKeyboardButton(f"{name} (ID: {user_id})", callback_data=f"name_change_{user_id}")
-                keyboard.append([button])
-                
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                "Ismini o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:",
-                reply_markup=reply_markup
-            )
-            return ADMIN_SELECT_USER_FOR_NAME_CHANGE
-            
-        # Regular user changing their own name
-        await update.message.reply_text("Yangi ismingizni kiriting:")
-        context.user_data['name_change_target'] = uid  # Store target as self
-        return NAME_CHANGE
         
+        await update.message.reply_text("Yangi ismingizni kiriting:")
+        return NAME_CHANGE
     except Exception as e:
         logger.error(f"Error in start_name_change: {str(e)}")
         await update.message.reply_text("Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
         return ConversationHandler.END
 
-async def handle_name_change_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle admin's selection of user for name change"""
-    try:
-        query = update.callback_query
-        await query.answer()
-        
-        uid = str(update.effective_user.id)
-        admins = initialize_admins()
-        
-        if uid not in admins["admins"]:
-            await query.edit_message_text("Siz admin emassiz.")
-            return ConversationHandler.END
-            
-        target_id = query.data.split("_")[2]
-        context.user_data['name_change_target'] = target_id
-        
-        await query.edit_message_text("Yangi ismni kiriting:")
-        return ADMIN_ENTER_NEW_NAME
-        
-    except Exception as e:
-        logger.error(f"Error in handle_name_change_selection: {str(e)}")
-        await query.edit_message_text("Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
-        return ConversationHandler.END
-
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Process name change for both regular users and admins"""
+    """Process name change"""
     try:
         new_name = update.message.text.strip()
         if not new_name:
             await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
-            return context.user_data.get('admin_mode', False) and ADMIN_ENTER_NEW_NAME or NAME_CHANGE
+            return NAME_CHANGE
             
         uid = str(update.effective_user.id)
-        target_id = context.user_data.get('name_change_target')
-        
-        if not target_id:
-            await update.message.reply_text("Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
-            return ConversationHandler.END
-            
-        # Get current data
         data = await initialize_data()
-        if target_id not in data["users"]:
-            await update.message.reply_text("Foydalanuvchi topilmadi.")
+        
+        if uid not in data["users"]:
+            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
             return ConversationHandler.END
             
-        # Store old name for confirmation message
-        old_name = data["users"][target_id]["name"]
+        old_name = data["users"][uid]["name"]
         
-        # Update user data in database first
-        user_data = data["users"][target_id].copy()
+        # Update in database first
+        user_data = data["users"][uid].copy()
         user_data["name"] = new_name
+        db_result = db.update_user(uid, user_data)
         
-        # Update in database
-        db_result = db.update_user(target_id, user_data)
         if not db_result.acknowledged:
-            logger.error(f"Database update failed for user {target_id}")
+            logger.error(f"Database update failed for user {uid}")
             await update.message.reply_text(
                 "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-                reply_markup=create_regular_keyboard() if uid == target_id else create_admin_keyboard()
+                reply_markup=create_regular_keyboard()
             )
             return ConversationHandler.END
             
         # Update local data
-        data["users"][target_id]["name"] = new_name
-        
-        # Update daily attendance if present
-        today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-        if today in data.get("daily_attendance", {}):
-            daily_data = data["daily_attendance"][today]
-            for status in ["confirmed", "declined", "pending"]:
-                if target_id in daily_data.get(status, []):
-                    daily_data[status].remove(target_id)
-                    daily_data[status].append(target_id)
-            db.update_daily_attendance(today, daily_data)
-            
-        # Update attendance history
-        for date in data.get("attendance_history", {}):
-            history = db.get_attendance_history(date)
-            if history:
-                for status in ["confirmed", "declined"]:
-                    if target_id in history.get(status, []):
-                        history[status].remove(target_id)
-                        history[status].append(target_id)
-                db.update_attendance_history(date, history)
-                
-        # Save local data changes
+        data["users"][uid]["name"] = new_name
         await save_data(data)
         
-        # Verify the change in database
-        updated_user = db.get_user(target_id)
-        if not updated_user or updated_user.get("name") != new_name:
-            logger.error(f"Name change verification failed for user {target_id}")
-            await update.message.reply_text(
-                "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-                reply_markup=create_regular_keyboard() if uid == target_id else create_admin_keyboard()
-            )
-            return ConversationHandler.END
-            
-        # Send appropriate confirmation message with correct keyboard
-        if uid == target_id:
-            await update.message.reply_text(
-                f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
-                reply_markup=create_regular_keyboard()
-            )
-        else:
-            await update.message.reply_text(
-                f"Foydalanuvchi {old_name} ning ismi {new_name} ga o'zgartirildi.",
-                reply_markup=create_admin_keyboard()
-            )
-            
+        await update.message.reply_text(
+            f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
+            reply_markup=create_regular_keyboard()
+        )
         return ConversationHandler.END
         
     except Exception as e:
         logger.error(f"Error in process_name_change: {str(e)}")
         await update.message.reply_text(
             "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
-            f"{user_data['name']} ning kunlik narxi {old_price:,} so'mdan {price:,} so'mga o'zgartirildi.",
-            reply_markup=create_admin_keyboard()
+            reply_markup=create_regular_keyboard()
         )
         return ConversationHandler.END
-        
-    except ValueError:
-        await update.message.reply_text("Iltimos, to'g'ri narx kiriting.")
-        return ADMIN_DAILY_PRICE_ENTER_AMOUNT
-    except Exception as e:
-        logger.error(f"Error in daily_price_mod_enter_amount: {str(e)}")
-        await update.message.reply_text("Kunlik narx o'zgartirishda xatolik yuz berdi.")
-        return ConversationHandler.END
-
-async def cancel_daily_price_modification(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Kunlik narx o'zgarishi bekor qilindi.")
-    return ConversationHandler.END
 
 # ---------------------- Admin and General User Commands ---------------------- #
 
@@ -1455,7 +1349,7 @@ def main():
     )
     application.add_handler(registration_handler)
 
-    # Add name change conversation handler with proper pattern matching
+    # Add name change conversation handler
     name_change_conv = ConversationHandler(
         entry_points=[
             CommandHandler('ism_ozgartirish', start_name_change),
@@ -1467,27 +1361,6 @@ def main():
         fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)]
     )
     application.add_handler(name_change_conv)
-    # Add admin balance modification conversation handler
-    balance_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^(💵 Balans qo'shish|💸 Balans kamaytirish)$"), start_balance_modification)],
-        states={
-            ADMIN_BALANCE_SELECT_USER: [CallbackQueryHandler(balance_mod_select_user_callback, pattern="^balance_mod_")],
-            ADMIN_BALANCE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, balance_mod_enter_amount)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_balance_modification)]
-    )
-    application.add_handler(balance_conv)
-
-    # Add admin daily price adjustment conversation handler
-    daily_price_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^(📝 Kunlik narx)$"), start_daily_price_modification)],
-        states={
-            ADMIN_DAILY_PRICE_SELECT_USER: [CallbackQueryHandler(daily_price_mod_select_user_callback, pattern="^price_mod_")],
-            ADMIN_DAILY_PRICE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_price_mod_enter_amount)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_daily_price_modification)]
-    )
-    application.add_handler(daily_price_conv)
 
     # Add command handlers
     application.add_handler(CommandHandler('balansim', check_balance))
