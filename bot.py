@@ -174,17 +174,14 @@ def is_admin(user_id, admins):
 # ---------------------- Keyboards ---------------------- #
 
 def create_admin_keyboard():
-    return ReplyKeyboardMarkup(
-        [
-            ["👥 Foydalanuvchilar", "❌ Foydalanuvchini o'chirish"],
-            ["💵 Balans qo'shish", "💸 Balans kamaytirish"],
-            ["📝 Kunlik narx", "📊 Bugungi qatnashuv"],
-            ["🔄 Balanslarni nollash", "💰 Kassa"],
-            ["✏️ Ism o'zgartirish", "❓ Yordam"],
-            ["⬅️ Asosiy menyu"]
-        ],
-        resize_keyboard=True,
-    )
+    """Create keyboard for admin panel"""
+    keyboard = [
+        [KeyboardButton("👥 Foydalanuvchilar"), KeyboardButton("📊 Statistika")],
+        [KeyboardButton("💰 Balans o'zgartirish"), KeyboardButton("📝 Tushlik menyusi")],
+        [KeyboardButton("📅 Bugungi kelishlar"), KeyboardButton("📊 Kassa")],
+        [KeyboardButton("🔙 Orqaga")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
 def create_regular_keyboard():
@@ -240,19 +237,41 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return PHONE
 
 async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message.contact:
-        phone_number = update.message.contact.phone_number
-    else:
-        phone_number = update.message.text.strip()
-        if not phone_number.replace('+', '').isdigit() or len(phone_number) < 9:
-            await update.message.reply_text("Iltimos, to'g'ri telefon raqam kiriting")
-            return PHONE
-    context.user_data['phone'] = phone_number
-    await update.message.reply_text(
-        "Iltimos, ismingizni kiriting:",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return NAME
+    try:
+        if update.message.contact:
+            phone_number = update.message.contact.phone_number
+            # Log the received phone number from contact
+            logger.info(f"Received phone number from contact: {phone_number}")
+        else:
+            phone_number = update.message.text.strip()
+            # Log the manually entered phone number
+            logger.info(f"Received manual phone number: {phone_number}")
+            
+            # Basic phone number validation
+            if not phone_number.replace('+', '').isdigit() or len(phone_number) < 9:
+                await update.message.reply_text("Iltimos, to'g'ri telefon raqam kiriting")
+                return PHONE
+                
+        # Ensure phone number is properly formatted
+        if not phone_number.startswith('+'):
+            phone_number = '+' + phone_number.lstrip('0')
+            
+        # Store phone number in context
+        context.user_data['phone'] = phone_number
+        
+        # Log the final stored phone number
+        logger.info(f"Storing phone number in context: {phone_number}")
+        
+        await update.message.reply_text(
+            "Iltimos, ismingizni kiriting:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return NAME
+        
+    except Exception as e:
+        logger.error(f"Error in phone registration: {str(e)}")
+        await update.message.reply_text("Telefon raqamni saqlashda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+        return PHONE
 
 async def name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
@@ -336,75 +355,85 @@ async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return NAME_CHANGE
 
 async def process_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Process name change"""
     try:
+        user_id = str(update.effective_user.id)
         new_name = update.message.text.strip()
-        if not new_name:
-            await update.message.reply_text("Ism bo'sh bo'lmasligi kerak. Iltimos, qayta kiriting:")
-            return NAME_CHANGE
-            
-        uid = str(update.effective_user.id)
-        data = await initialize_data()
         
-        if uid not in data["users"]:
-            await update.message.reply_text("Iltimos, /start orqali ro'yxatdan o'ting.")
-            return
-            
-        old_name = data["users"][uid]["name"]
-        data["users"][uid]["name"] = new_name
+        if not new_name:
+            await update.message.reply_text(
+                "Ism bo'sh bo'lishi mumkin emas. Iltimos, qayta kiriting:",
+                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+            )
+            return NAME
+        
+        # Get current data
+        data = await initialize_data()
+        if user_id not in data["users"]:
+            await update.message.reply_text(
+                "Siz ro'yxatdan o'tmagansiz. Iltimos, avval ro'yxatdan o'ting.",
+                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+            )
+            return NAME
+        
+        # Store old name for confirmation message
+        old_name = data["users"][user_id]["name"]
+        
+        # Update name in database
+        user_data = data["users"][user_id]
+        user_data["name"] = new_name
+        db.update_user(user_id, user_data)
         
         # Update name in daily attendance if present
         today = datetime.datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
-        if today in data["daily_attendance"]:
-            # Update in confirmed list
-            if uid in data["daily_attendance"][today]["confirmed"]:
-                data["daily_attendance"][today]["confirmed"].remove(uid)
-                data["daily_attendance"][today]["confirmed"].append(uid)
-            
-            # Update in declined list
-            if uid in data["daily_attendance"][today]["declined"]:
-                data["daily_attendance"][today]["declined"].remove(uid)
-                data["daily_attendance"][today]["declined"].append(uid)
-            
-            # Update in pending list
-            if uid in data["daily_attendance"][today]["pending"]:
-                data["daily_attendance"][today]["pending"].remove(uid)
-                data["daily_attendance"][today]["pending"].append(uid)
+        if today in data.get("daily_attendance", {}):
+            daily_data = data["daily_attendance"][today]
+            for status in ["confirmed", "declined", "pending"]:
+                if user_id in daily_data.get(status, []):
+                    daily_data[status].remove(user_id)
+                    daily_data[status].append(user_id)
+                    db.update_daily_attendance(today, daily_data)
         
         # Update name in attendance history
-        for date in data["attendance_history"]:
-            if uid in data["attendance_history"][date]["confirmed"]:
-                data["attendance_history"][date]["confirmed"].remove(uid)
-                data["attendance_history"][date]["confirmed"].append(uid)
-            if uid in data["attendance_history"][date]["declined"]:
-                data["attendance_history"][date]["declined"].remove(uid)
-                data["attendance_history"][date]["declined"].append(uid)
+        for date, history in data.get("attendance_history", {}).items():
+            for status in ["confirmed", "declined"]:
+                if user_id in history.get(status, []):
+                    history[status].remove(user_id)
+                    history[status].append(user_id)
+                    db.update_attendance_history(date, history)
         
-        # Save the changes
-        await save_data(data)
+        # Save all changes
+        if not await save_data(data):
+            await update.message.reply_text(
+                "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+            )
+            return NAME
         
-        # Verify the changes were saved
-        data = await initialize_data()  # Reload data to verify
-        if data["users"][uid]["name"] != new_name:
-            logger.error(f"Name change not saved properly for user {uid}")
-            await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
-            return ConversationHandler.END
+        # Verify the change was saved
+        data = await initialize_data()
+        if data["users"][user_id]["name"] != new_name:
+            await update.message.reply_text(
+                "Ism o'zgartirish saqlanmadi. Iltimos, qayta urinib ko'ring.",
+                reply_markup=ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+            )
+            return NAME
         
+        # Send confirmation message
         await update.message.reply_text(
-            f"Sizning ismingiz {old_name} dan {new_name} ga o'zgartirildi.",
-            reply_markup=ReplyKeyboardMarkup(
-                [
-                    ["💸 Balansim", "📊 Qatnashishlarim"],
-                    ["✏️ Ism o'zgartirish", "❌ Tushlikni bekor qilish"],
-                    ["❓ Yordam"],
-                ],
-                resize_keyboard=True,
-            ),
+            f"Ismingiz muvaffaqiyatli o'zgartirildi!\n\n"
+            f"Eski ism: {old_name}\n"
+            f"Yangi ism: {new_name}",
+            reply_markup=create_main_keyboard()
         )
         return ConversationHandler.END
         
     except Exception as e:
         logger.error(f"Error in process_name_change: {str(e)}")
-        await update.message.reply_text("Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.")
+        await update.message.reply_text(
+            "Ism o'zgartirishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+            reply_markup=create_main_keyboard()
+        )
         return ConversationHandler.END
 
 # Allow users to change their name via button
@@ -582,20 +611,24 @@ async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     data = await initialize_data()
     uid = str(query.from_user.id)
     callback = query.data
+    
     if callback.startswith("attendance_"):
         action, date = callback.replace("attendance_", "").split("_")
         if date not in data["daily_attendance"]:
             data["daily_attendance"][date] = {"confirmed": [], "declined": [], "pending": [], "menu": {}}
+        
+        # Remove user from all lists
         for lst in [data["daily_attendance"][date]["pending"],
-                    data["daily_attendance"][date]["confirmed"],
-                    data["daily_attendance"][date]["declined"]]:
+                   data["daily_attendance"][date]["confirmed"],
+                   data["daily_attendance"][date]["declined"]]:
             if uid in lst:
                 lst.remove(uid)
+        
         if action == "yes":
-            # Check if user has enough balance
-            if uid in data["users"] and data["users"][uid]["balance"] < 25000:
-                await query.edit_message_text("Sizning balansingiz yetarli emas. Iltimos, balansingizni to'ldiring.")
-                return
+            # Add to confirmed list regardless of balance
+            data["daily_attendance"][date]["confirmed"].append(uid)
+            
+            # Show menu keyboard
             menu_kb = InlineKeyboardMarkup(
                 [
                     [InlineKeyboardButton("1. Qovurma Lag'mon", callback_data=f"menu_1_{date}"),
@@ -611,10 +644,18 @@ async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                     [InlineKeyboardButton("11. Xonim", callback_data=f"menu_11_{date}")]
                 ]
             )
-            await query.edit_message_text("Iltimos, menyudan tanlang:", reply_markup=menu_kb)
+            
+            # Check balance and add notification if low
+            message = "Iltimos, menyudan tanlang:"
+            if uid in data["users"] and data["users"][uid]["balance"] < 100000:
+                message = f"⚠️ Eslatma: Sizning hisobingizda {data['users'][uid]['balance']} so'm mavjud.\n" + message
+            
+            await query.edit_message_text(message, reply_markup=menu_kb)
+            
         elif action == "no":
             data["daily_attendance"][date]["declined"].append(uid)
             await query.edit_message_text("Tushlik uchun javobingiz qayd etildi.")
+            
     elif callback.startswith("menu_"):
         parts = callback.split("_")
         if len(parts) >= 3:
@@ -625,9 +666,16 @@ async def attendance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 data["daily_attendance"][date]["confirmed"].append(uid)
             data["daily_attendance"][date].setdefault("menu", {})[uid] = dish
             dish_name = MENU_OPTIONS.get(dish, "N/A")
-            await query.edit_message_text(f"Siz tanladingiz: {dish_name}")
+            
+            # Add balance notification to confirmation message if needed
+            message = f"Siz tanladingiz: {dish_name}"
+            if uid in data["users"] and data["users"][uid]["balance"] < 100000:
+                message += f"\n\n⚠️ Eslatma: Sizning hisobingizda {data['users'][uid]['balance']} so'm mavjud."
+            
+            await query.edit_message_text(message)
         else:
             await query.edit_message_text("Noto'g'ri tanlov.")
+    
     await save_data(data)
 
 async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -841,11 +889,23 @@ async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Build message
         message = "📋 Foydalanuvchilar ro'yxati:\n\n"
         
+        # Log data for debugging
+        logger.info(f"Total users found: {len(sorted_users)}")
+        
         for i, (user_id, user_data) in enumerate(sorted_users, 1):
             name = user_data.get("name", "N/A")
-            phone = user_data.get("phone", "N/A")
+            phone = user_data.get("phone", "")  # Get phone number, empty string if not found
             balance = user_data.get("balance", 0)
-            daily_price = user_data.get("daily_price", 25000)  # Default to 25000 if not set
+            daily_price = user_data.get("daily_price", 25000)
+            
+            # Format phone number if it exists
+            if not phone:
+                phone = "N/A"
+            elif not phone.startswith("+"):
+                phone = "+" + phone
+            
+            # Log user data for debugging
+            logger.info(f"User {user_id} data - Name: {name}, Phone: {phone}, Balance: {balance}")
             
             message += (
                 f"{i}. 👤 {name}\n"
