@@ -5,18 +5,20 @@ import os
 import datetime
 import pytz
 import asyncio
+import sys
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
 
 from database import init_db
 from config import BOT_TOKEN
-from models.user_model import User  # Add this import
+from models.user_model import User
 
 # Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    stream=sys.stdout  # Ensure logs go to stdout for Railway
 )
 logger = logging.getLogger(__name__)
 
@@ -84,15 +86,14 @@ def main():
         )
 
         # 7) Start polling (this is blocking and manages its own loop)
-        application.run_polling()
+        logger.info("Starting bot...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        logger.error(f"Error in main: {e}", exc_info=True)
+        raise
     finally:
         # Clean up the loop only after everything is done
         loop.close()
 
-
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.error(f"Error in main: {e}")
-        raise
+    main()
