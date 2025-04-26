@@ -6,6 +6,7 @@ import datetime
 import pytz
 import asyncio
 import sys
+import traceback
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -36,6 +37,8 @@ def main():
         # 1) Load .env
         load_dotenv()
         logger.info("Environment variables loaded")
+        logger.info(f"BOT_TOKEN exists: {bool(os.getenv('BOT_TOKEN', BOT_TOKEN))}")
+        logger.info(f"MONGODB_URI exists: {bool(os.getenv('MONGODB_URI'))}")
 
         # 2) Create and set event loop
         loop = asyncio.new_event_loop()
@@ -96,7 +99,8 @@ def main():
         logger.info("Starting bot...")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
-        logger.error(f"Error in main: {e}", exc_info=True)
+        logger.error(f"Error in main: {e}")
+        logger.error(traceback.format_exc())
         raise
     finally:
         # Clean up the loop only after everything is done
