@@ -13,7 +13,7 @@ from database import init_db
 from config import BOT_TOKEN
 from models.user_model import User
 
-# Configure logging
+# Configure logging for Railway
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -31,6 +31,13 @@ def main():
     """Main entrypoint: initialize DB, build app, register handlers, schedule jobs, and start polling."""
     # 1) Load .env
     load_dotenv()
+
+    if not os.getenv("BOT_TOKEN", BOT_TOKEN):
+        logger.error("BOT_TOKEN is not set!")
+        exit(1)
+    if not os.getenv("MONGODB_URI"):
+        logger.error("MONGODB_URI is not set!")
+        exit(1)
 
     # 2) Create and set event loop
     loop = asyncio.new_event_loop()
@@ -83,6 +90,7 @@ def main():
             name="midnight_cleanup"
         )
 
+        logger.info("Bot is starting...")
         # 7) Start polling (this is blocking and manages its own loop)
         application.run_polling()
     finally:
