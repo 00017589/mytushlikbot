@@ -8,6 +8,7 @@ import asyncio
 import sys
 
 from dotenv import load_dotenv
+from telegram import Update
 from telegram.ext import ApplicationBuilder
 
 from database import init_db
@@ -31,16 +32,19 @@ async def cleanup_old_data(context):
 
 def main():
     """Main entrypoint: initialize DB, build app, register handlers, schedule jobs, and start polling."""
-    # 1) Load .env
-    load_dotenv()
-
-    # 2) Create and set event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     try:
+        # 1) Load .env
+        load_dotenv()
+        logger.info("Environment variables loaded")
+
+        # 2) Create and set event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        logger.info("Event loop created")
+
         # 3) Initialize database
         loop.run_until_complete(init_db())
+        logger.info("Database initialized")
 
         # 4) Build the Telegram Application
         application = (
@@ -48,6 +52,7 @@ def main():
             .token(os.getenv("BOT_TOKEN", BOT_TOKEN))
             .build()
         )
+        logger.info("Telegram application built")
 
         # 5) Import and register handlers now that app exists
         import handlers.user_handlers as uh
@@ -57,6 +62,7 @@ def main():
         uh.register_handlers(application)
         ah.register_handlers(application)
         bh.register_handlers(application)
+        logger.info("Handlers registered")
 
         # 6) Schedule daily jobs
         jq = application.job_queue
@@ -84,6 +90,7 @@ def main():
             time=datetime.time(hour=0, minute=0, tzinfo=tz),
             name="midnight_cleanup"
         )
+        logger.info("Jobs scheduled")
 
         # 7) Start polling (this is blocking and manages its own loop)
         logger.info("Starting bot...")
