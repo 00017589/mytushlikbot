@@ -128,9 +128,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 2) BACK TO MAIN MENU ───────────────────────────────────────────────────────
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = ["💸 Balansim", "✏️ Ism o'zgartirish"]
-    if await user_is_admin(update.effective_user.id):
-        kb.append("🔧 Admin panel")
+    is_admin = await user_is_admin(update.effective_user.id)
+    kb = get_default_kb(is_admin)
     
     if update.callback_query:
         # Handle callback query case
@@ -139,13 +138,13 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Bosh menyu:",
-            reply_markup=ReplyKeyboardMarkup([kb], resize_keyboard=True)
+            reply_markup=kb
         )
     else:
         # Handle message case
         await update.message.reply_text(
             "Bosh menyu:",
-            reply_markup=ReplyKeyboardMarkup([kb], resize_keyboard=True)
+            reply_markup=kb
         )
     return ConversationHandler.END
 
