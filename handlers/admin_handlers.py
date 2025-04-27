@@ -61,7 +61,8 @@ KASSA_SUB_BTN = "Kassa ayrish"
     S_KASSA_REM,       # entering kassa− amount
     S_CARD_NUMBER,     # entering new card number
     S_CARD_OWNER,      # entering new card owner name
-) = range(12)
+    S_NOTIFY_MESSAGE,  # entering notification message
+) = range(13)
 
 # ─── KEYBOARDS ─────────────────────────────────────────────────────────────────
 def get_admin_kb():
@@ -561,9 +562,35 @@ async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Yo'q", callback_data="notify_cancel")]
     ]
     await update.message.reply_text(
-        "⚠️ Barcha foydalanuvchilarga botni qayta ishga tushirish haqida xabar yuborishni tasdiqlaysizmi?",
+        "⚠️ Barcha foydalanuvchilarga xabar yuborishni tasdiqlaysizmi?\n\n"
+        "Xabar matnini kiriting:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    return S_NOTIFY_MESSAGE
+
+async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the notification message input"""
+    if update.message.text == BACK_BTN:
+        await update.message.reply_text(
+            "Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
+    
+    # Store the message temporarily
+    context.user_data['notify_message'] = update.message.text
+    
+    # Add confirmation step
+    keyboard = [
+        [InlineKeyboardButton("Ha", callback_data="notify_confirm")],
+        [InlineKeyboardButton("Yo'q", callback_data="notify_cancel")]
+    ]
+    await update.message.reply_text(
+        f"⚠️ Quyidagi xabarni barcha foydalanuvchilarga yuborishni tasdiqlaysizmi?\n\n"
+        f"{update.message.text}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END
 
 async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -573,13 +600,15 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.message.edit_text("❌ Xabar yuborish bekor qilindi.")
         return
     
+    message = context.user_data.get('notify_message', "⚠️ Bot yangilandi! Iltimos, botni qayta ishga tushiring va /start bosing.")
+    
     cnt = 0
     failed = []
     for u in await get_all_users_async():
         try:
             await context.bot.send_message(
                 u.telegram_id,
-                "⚠️ Bot yangilandi! Iltimos, botni qayta ishga tushiring va /start bosing."
+                message
             )
             cnt += 1
         except Exception as e:
@@ -589,6 +618,10 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         f"✅ {cnt} foydalanuvchiga yuborildi.\n"
         f"❌ {len(failed)} foydalanuvchiga yuborilmadi:\n" + "\n".join(failed)
     )
+    
+    # Clear the stored message
+    if 'notify_message' in context.user_data:
+        del context.user_data['notify_message']
 
 async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
@@ -824,6 +857,17 @@ def register_handlers(app):
     )
     app.add_handler(card_conv)
 
+    # Notify all conversation handler
+    notify_conv = ConversationHandler(
+        entry_points=[CommandHandler("notify_all", notify_all)],
+        states={
+            S_NOTIFY_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)],
+        },
+        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu)],
+        allow_reentry=True
+    )
+    app.add_handler(notify_conv)
+
     # (3) inline callbacks
     app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^(add_admin:\d+|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^(remove_admin:\d+|back_to_menu)$"))
@@ -831,36 +875,6 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(adjust_balance_callback, pattern=r"^(adj_user:\d+|add_bal:\d+|sub_bal:\d+|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(delete_user_callback, pattern=r"^(delete_user:\d+|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back|back_to_menu)$"))
-
-    # (4) amount handlers
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(ADD_ADMIN_BTN)}$") & 
-        ~filters.Regex(f"^{re.escape(REMOVE_ADMIN_BTN)}$") & ~filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(ADJ_BAL_BTN)}$") & ~filters.Regex(f"^{re.escape(DELETE_USER_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(KASSA_BTN)}$") & ~filters.Regex(f"^{re.escape(KASSA_BAL_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(KASSA_ADD_BTN)}$") & ~filters.Regex(f"^{re.escape(KASSA_SUB_BTN)}$"),
-        handle_amount
-    ), group=1)
-
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(ADD_ADMIN_BTN)}$") & 
-        ~filters.Regex(f"^{re.escape(REMOVE_ADMIN_BTN)}$") & ~filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(ADJ_BAL_BTN)}$") & ~filters.Regex(f"^{re.escape(DELETE_USER_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(KASSA_BTN)}$") & ~filters.Regex(f"^{re.escape(KASSA_BAL_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(KASSA_ADD_BTN)}$") & ~filters.Regex(f"^{re.escape(KASSA_SUB_BTN)}$"),
-        handle_daily_price
-    ), group=2)
-
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(ADD_ADMIN_BTN)}$") & 
-        ~filters.Regex(f"^{re.escape(REMOVE_ADMIN_BTN)}$") & ~filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(ADJ_BAL_BTN)}$") & ~filters.Regex(f"^{re.escape(DELETE_USER_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(KASSA_BTN)}$") & ~filters.Regex(f"^{re.escape(KASSA_BAL_BTN)}$") &
-        ~filters.Regex(f"^{re.escape(KASSA_ADD_BTN)}$") & ~filters.Regex(f"^{re.escape(KASSA_SUB_BTN)}$"),
-        handle_kassa_amount
-    ), group=3)
-
-    # Add new callback handlers
     app.add_handler(CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$"))
     app.add_handler(CallbackQueryHandler(survey_confirm_callback, pattern=r"^survey_(confirm|cancel)$"))
 
