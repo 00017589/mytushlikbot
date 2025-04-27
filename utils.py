@@ -24,10 +24,11 @@ async def any_admins_exist() -> bool:
 
 
 def get_default_kb(is_admin: bool):
-    row = ["💸 Balansim", "✏️ Ism o‘zgartirish"]
+    row1 = ["💸 Balansim", "✏️ Ism o'zgartirish"]
+    row2 = ["💳 Karta Raqami"]
     if is_admin:
-        row.append("🔧 Admin panel")
-    return ReplyKeyboardMarkup([row], resize_keyboard=True)
+        row1.append("🔧 Admin panel")
+    return ReplyKeyboardMarkup([row1, row2], resize_keyboard=True)
 
 async def get_user_async(telegram_id: int) -> Optional[User]:
     # first try the new field, then fall back to the old one

@@ -39,6 +39,7 @@ ADJ_BAL_BTN   = "Balansni o'zgartirish"
 DELETE_USER_BTN = "Foydalanuvchini o'chirish"
 CXL_LUNCH_ALL_BTN = "Tushlikni bekor qilish"
 KASSA_BTN     = "Kassa"
+CARD_MANAGE_BTN = "Karta ma'lumotlarini o'zgartirish"
 BACK_BTN      = "Ortga"
 
 # ─── KASSA SUBMENU BUTTONS ─────────────────────────────────────────────────────
@@ -58,7 +59,9 @@ KASSA_SUB_BTN = "Kassa ayrish"
     S_KASSA,           # in Kassa submenu
     S_KASSA_ADD,       # entering kassa+ amount
     S_KASSA_REM,       # entering kassa− amount
-) = range(10)
+    S_CARD_NUMBER,     # entering new card number
+    S_CARD_OWNER,      # entering new card owner name
+) = range(12)
 
 # ─── KEYBOARDS ─────────────────────────────────────────────────────────────────
 def get_admin_kb():
@@ -68,6 +71,7 @@ def get_admin_kb():
         [DAILY_PRICE_BTN, ADJ_BAL_BTN],
         [DELETE_USER_BTN, CXL_LUNCH_ALL_BTN],
         [KASSA_BTN],
+        [CARD_MANAGE_BTN],
         [BACK_BTN],
     ], resize_keyboard=True)
 
@@ -727,6 +731,68 @@ async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return ConversationHandler.END
 
+# ─── CARD MANAGEMENT ─────────────────────────────────────────────────────────
+async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the card management flow"""
+    await update.message.reply_text(
+        "Yangi karta raqamini kiriting:",
+        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+    )
+    return S_CARD_NUMBER
+
+async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the new card number input"""
+    if update.message.text == BACK_BTN:
+        await update.message.reply_text(
+            "Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
+    
+    # Store the card number temporarily
+    context.user_data['new_card_number'] = update.message.text
+    
+    await update.message.reply_text(
+        "Karta egasining ismini kiriting:",
+        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+    )
+    return S_CARD_OWNER
+
+async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the new card owner name input and save both to database"""
+    if update.message.text == BACK_BTN:
+        await update.message.reply_text(
+            "Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
+    
+    from database import get_collection
+    
+    card_details_col = await get_collection("card_details")
+    
+    # Update or insert new card details
+    await card_details_col.update_one(
+        {},  # empty filter to match any document
+        {
+            "$set": {
+                "card_number": context.user_data['new_card_number'],
+                "card_owner": update.message.text
+            }
+        },
+        upsert=True  # create if doesn't exist
+    )
+    
+    # Clear temporary data
+    if 'new_card_number' in context.user_data:
+        del context.user_data['new_card_number']
+    
+    await update.message.reply_text(
+        "✅ Karta ma'lumotlari muvaffaqiyatli o'zgartirildi!",
+        reply_markup=get_admin_kb()
+    )
+    return ConversationHandler.END
+
 # ─── 10) REGISTER ALL HANDLERS ─────────────────────────────────────────────────
 def register_handlers(app):
     # (1) plain commands
@@ -746,6 +812,18 @@ def register_handlers(app):
         (BACK_BTN,     back_to_menu),
     ]:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(txt)}$"), fn))
+
+    # Card management conversation handler
+    card_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_MANAGE_BTN)}$"), start_card_management)],
+        states={
+            S_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_number)],
+            S_CARD_OWNER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_owner)],
+        },
+        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu)],
+        allow_reentry=True
+    )
+    app.add_handler(card_conv)
 
     # (3) inline callbacks
     app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^(add_admin:\d+|back_to_menu)$"))
