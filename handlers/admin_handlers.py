@@ -556,15 +556,9 @@ async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not caller or not caller.is_admin:
         return await update.message.reply_text("❌ Siz admin emassiz.")
     
-    # Add confirmation step
-    keyboard = [
-        [InlineKeyboardButton("Ha", callback_data="notify_confirm")],
-        [InlineKeyboardButton("Yo'q", callback_data="notify_cancel")]
-    ]
     await update.message.reply_text(
-        "⚠️ Barcha foydalanuvchilarga xabar yuborishni tasdiqlaysizmi?\n\n"
-        "Xabar matnini kiriting:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "⚠️ Barcha foydalanuvchilarga yubormoqchi bo'lgan xabarni kiriting:",
+        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
     )
     return S_NOTIFY_MESSAGE
 
@@ -600,7 +594,10 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.message.edit_text("❌ Xabar yuborish bekor qilindi.")
         return
     
-    message = context.user_data.get('notify_message', "⚠️ Bot yangilandi! Iltimos, botni qayta ishga tushiring va /start bosing.")
+    message = context.user_data.get('notify_message')
+    if not message:
+        await query.message.edit_text("❌ Xabar topilmadi. Iltimos, qaytadan boshlang.")
+        return
     
     cnt = 0
     failed = []
