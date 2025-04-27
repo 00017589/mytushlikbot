@@ -21,10 +21,11 @@ users_col = None
 kassa_col = None
 daily_food_choices_col = None
 test_food_choices_col = None  # New collection for test data
+card_details_col = None  # New collection for card details
 
 async def get_collection(collection_name: str):
     """Get a collection, initializing the database if needed"""
-    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col
+    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col, card_details_col
     
     if _client is None:
         await init_db()
@@ -37,12 +38,14 @@ async def get_collection(collection_name: str):
         return daily_food_choices_col
     elif collection_name == "test_food_choices":
         return test_food_choices_col
+    elif collection_name == "card_details":
+        return card_details_col
     else:
         raise ValueError(f"Unknown collection: {collection_name}")
 
 async def init_db():
     """Initialize database connection and indexes"""
-    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col
+    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col, card_details_col
     
     try:
         # Initialize client and collections
@@ -52,6 +55,7 @@ async def init_db():
         kassa_col = db["kassa"]
         daily_food_choices_col = db["daily_food_choices"]
         test_food_choices_col = db["test_food_choices"]  # Initialize test collection
+        card_details_col = db["card_details"]  # Initialize card details collection
         
         # Create indexes
         await users_col.create_index("telegram_id", unique=True)
@@ -70,6 +74,13 @@ async def init_db():
                 "date": today,
                 "balance": 0,
                 "transactions": []
+            })
+            
+        # Insert default card details if not exists
+        if not await card_details_col.find_one({}):
+            await card_details_col.insert_one({
+                "card_number": "4097840201138901",
+                "card_owner": "Abdukarimov Hasan"
             })
             
         print("Database initialized successfully")

@@ -22,7 +22,7 @@ from telegram.ext import (
     filters,
 )
 from pymongo import ReadPreference
-from database import users_col
+from database import users_col, get_collection
 
 from models.user_model import User
 from utils import (
@@ -50,6 +50,7 @@ BAL_BTN   = "💸 Balansim"
 NAME_BTN  = "✏️ Ism o'zgartirish"
 CXL_BTN   = "❌ Tushlikni bekor qilish"
 ADMIN_BTN = "🔧 Admin panel"
+CARD_BTN  = "💳 Karta Raqami"
 
 # ─── STATES ────────────────────────────────────────────────────────────────────
 
@@ -453,9 +454,15 @@ async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
 async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     """Send summary of today's attendance to admins and users."""
     tz = pytz.timezone("Asia/Tashkent")
-    today = datetime.datetime.now(tz).strftime("%Y-%m-%d")
+    now = datetime.datetime.now(tz)
+    today = now.strftime("%Y-%m-%d")
 
+    # Skip weekends for non-test summaries
     is_test_summary = context.job.data.get('is_test', False) if context.job and context.job.data else False
+    if now.weekday() >= 5 and not is_test_summary:
+        logger.info("Skipping summary on weekend.")
+        return
+
     logger.info(f"Running send_summary. is_test_summary = {is_test_summary}")
 
     users = await get_all_users_async()
@@ -606,6 +613,25 @@ async def user_is_admin(telegram_id: int) -> bool:
     u = await get_user_async(telegram_id)
     return bool(u and u.is_admin)
 
+async def show_card_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show card details in monospace font with copy option"""
+    card_details_col = await get_collection("card_details")
+    card_info = await card_details_col.find_one({})
+    
+    if not card_info:
+        await update.message.reply_text("Karta ma'lumotlari topilmadi.")
+        return
+    
+    message = (
+        f"*Karta raqami:*\n`{card_info['card_number']}`\n\n"
+        f"*Karta egasi:*\n{card_info['card_owner']}"
+    )
+    
+    await update.message.reply_text(
+        message,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
 # ─── REGISTER HANDLERS ────────────────────────────────────────────────────────
 
 def register_handlers(app):
@@ -643,6 +669,7 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(BAL_BTN)}$"), balance))
     app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(NAME_BTN)}$"), change_name_start))
     app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(CXL_BTN)}$"), cancel_lunch))
+    app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(CARD_BTN)}$"), show_card_details))
 
     # ← import here so user_handlers doesn't circularly import admin_handlers
     from handlers.admin_handlers import admin_panel
