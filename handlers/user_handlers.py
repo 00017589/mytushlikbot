@@ -37,12 +37,24 @@ from config import DEFAULT_DAILY_PRICE
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-# Define the menu items in a central place
-MENU_ITEMS = [
-    "Qovurma Lag'mon", "Teftel Jarkob", "Mastava", "Sho'rva", "Sokoro",
-    "Do'lma", "Teftel Sho'rva", "Suyuq Lag'mon", "Osh", "Qovurma Makron",
-    "Xonim", "Bifshteks" # Added Bifshteks
-]
+# Define the menu items based on day of week
+def get_menu_items():
+    tz = pytz.timezone("Asia/Tashkent")
+    now = datetime.datetime.now(tz)
+    weekday = now.weekday()
+    
+    # Monday (0), Wednesday (2), Friday (4)
+    if weekday in [0, 2, 4]:
+        return [
+            "Qovurma Lag'mon", "Jarkob", "Sokoro", "Do'lma",
+            "Osh", "Qovurma Makron", "Xonim", "Bifshteks"
+        ]
+    # Tuesday (1), Thursday (3)
+    else:
+        return [
+            "Teftel sho'rva", "Mastava", "Chuchvara",
+            "Sho'rva", "Suyuq Lag'mon"
+        ]
 
 # ─── BUTTON LABELS ─────────────────────────────────────────────────────────────
 
@@ -181,9 +193,26 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─── MENU SELECTION ───────────────────────────────────────────────────────────
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Use the centrally defined MENU_ITEMS
-    kb = [[InlineKeyboardButton(item, callback_data=f"food:{item}")] for item in MENU_ITEMS]
-    await update.message.reply_text("Taomni tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+    """Show today's menu"""
+    user = await get_user_async(update.effective_user.id)
+    if not user:
+        return await update.message.reply_text(
+            "Iltimos, avval /start bilan ro'yxatdan o'ting."
+        )
+    
+    # Get menu items based on day of week
+    menu_items = get_menu_items()
+    
+    # Create keyboard with menu items
+    keyboard = []
+    for item in menu_items:
+        keyboard.append([InlineKeyboardButton(item, callback_data=item)])
+    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
+    
+    await update.message.reply_text(
+        "Bugungi taomlar:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # This function seems redundant if food selection happens via attendance_cb/food_selection_cb
@@ -467,13 +496,14 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
 
     users = await get_all_users_async()
     attendees = []
-    attendee_names = []
+    attendee_details = []  # List to store name and food choice pairs
 
     logger.info(f"--- Generating Summary for {today} ---")
     for u in users:
         if today in u.attendance:
             attendees.append(u)
-            attendee_names.append(u.name)
+            food_choice = await u.get_food_choice(today, is_test=is_test_summary)
+            attendee_details.append((u.name, food_choice))
 
     # Get food counts using the new aggregation method
     food_counts = await User.get_daily_food_counts(today, is_test=is_test_summary)
@@ -502,10 +532,12 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
 
 """
 
-    # Add list of names
+    # Add list of names with their food choices
     admin_summary += "📝 *Ro'yxat:*\n"
-    if attendee_names:
-        admin_summary += "\n".join([f"• {name}" for name in attendee_names])
+    if attendee_details:
+        for i, (name, food) in enumerate(attendee_details, 1):
+            food_text = f" - {food}" if food else " - Tanlanmagan"
+            admin_summary += f"{i}. {name}{food_text}\n"
     else:
         admin_summary += "Hech kim yo'q"
     admin_summary += "\n\n"
