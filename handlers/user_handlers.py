@@ -541,18 +541,21 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
                     foods_text = " va ".join(most_popular_foods)
                     await context.bot.send_message(
                         u.telegram_id,
-                        f"✅🍽️ Siz bugungi tushlik ro'yxatidasiz.\n\n🥇 Bugun tushlik uchun tanlangan taomlar: 🍛 {foods_text}"
+                        f"✅🍽️ Siz bugungi tushlik ro'yxatidasiz.\n\n🥇 Bugun tushlik uchun tanlangan taomlar: 🍛 {foods_text}",
+                        reply_markup=get_default_kb(u.is_admin)  # Remove cancel button
                     )
                 else:
                     # Single most popular food
                     await context.bot.send_message(
                         u.telegram_id,
-                        f"✅🍽️ Siz bugungi tushlik ro'yxatidasiz.\n\n🥇 Bugun tushlik uchun tanlangan taom: 🍛 {most_popular_foods[0]}"
+                        f"✅🍽️ Siz bugungi tushlik ro'yxatidasiz.\n\n🥇 Bugun tushlik uchun tanlangan taom: 🍛 {most_popular_foods[0]}",
+                        reply_markup=get_default_kb(u.is_admin)  # Remove cancel button
                     )
             else:
                 await context.bot.send_message(
                     u.telegram_id,
-                    "✅🍽️ Siz bugungi tushlik ro'yxatidasiz.\n\n🥄 Bugun asosiy taom aniqlanmadi."
+                    "✅🍽️ Siz bugungi tushlik ro'yxatidasiz.\n\n🥄 Bugun asosiy taom aniqlanmadi.",
+                    reply_markup=get_default_kb(u.is_admin)  # Remove cancel button
                 )
         except Exception as e:
             logger.error(f"Failed to send user summary to {u.name}: {e}")
@@ -574,7 +577,7 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Error cleaning up test data for user {user_id}: {e}")
         
-        logger.info("Test data cleanup completed")
+        logger.info("Test data cleanup complete")
         return  # Exit early for test summary
 
 async def check_debts(context: ContextTypes.DEFAULT_TYPE):
@@ -690,4 +693,38 @@ def register_handlers(app):
         interval=datetime.timedelta(days=2),
         first=first_time,
         name="debt_check"
+    )
+
+async def handle_food_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "back_to_menu":
+        await query.message.delete()
+        return
+    
+    user = await get_user_async(update.effective_user.id)
+    if not user:
+        await query.message.edit_text("❌ Foydalanuvchi topilmadi.")
+        return
+    
+    # Check if user has already selected food today
+    tz = pytz.timezone("Asia/Tashkent")
+    today = datetime.datetime.now(tz).strftime("%Y-%m-%d")
+    
+    if today in user.food_choices:
+        await query.message.edit_text("❌ Siz bugun allaqachon taom tanlagansiz.")
+        return
+    
+    # Store the food choice
+    user.food_choices[today] = query.data
+    await user.save()
+    
+    # Update keyboard to show cancel button
+    kb = get_default_kb(user.is_admin, has_food_selection=True)
+    
+    await query.message.edit_text(
+        f"✅ {query.data} tanlandi!\n"
+        f"Tushlikni bekor qilish uchun '❌ Tushlikni bekor qilish' tugmasini bosing.",
+        reply_markup=kb
     )

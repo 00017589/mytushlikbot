@@ -411,7 +411,7 @@ async def handle_kassa_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     try:
         amount = int(update.message.text)
-        if amount <= 0:
+        if amount == 0:  # Only prevent zero amounts
             raise ValueError
         
         action = context.user_data["pending_kassa"]
@@ -430,9 +430,6 @@ async def handle_kassa_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"Yangi balans: {new_balance:,} so'm"
             )
         else:
-            if current_balance < amount:
-                await update.message.reply_text("❌ Kassa balansi yetarli emas!")
-                return
             new_balance = current_balance - amount
             await kassa_col.update_one(
                 {},
@@ -512,7 +509,7 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         amount = int(update.message.text)
-        if amount <= 0:
+        if amount == 0:  # Only prevent zero amounts
             raise ValueError
         
         data = context.user_data["pending_amount"]
@@ -531,9 +528,6 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Yangi balans: {new_balance:,} so'm"
             )
         else:
-            if user["balance"] < amount:
-                await update.message.reply_text("❌ Balans yetarli emas!")
-                return
             new_balance = user["balance"] - amount
             await users_col.update_one(
                 {"telegram_id": user_id},
