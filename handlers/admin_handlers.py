@@ -702,41 +702,6 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     
     return ConversationHandler.END
 
-async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user responses to notifications"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Parse the callback data
-    _, response, user_id = query.data.split(":")
-    user_id = int(user_id)
-    
-    # Get the user
-    user = await users_col.find_one({"telegram_id": user_id})
-    if not user:
-        return
-    
-    # Update the message to show the response
-    if response == "yes":
-        await query.message.edit_text(f"{query.message.text}\n\n✅ Siz javob berdingiz: Ha")
-    else:
-        await query.message.edit_text(f"{query.message.text}\n\n❌ Siz javob berdingiz: Yo'q")
-    
-    # Track the response
-    if 'notify_responses' in context.user_data:
-        responses = context.user_data['notify_responses']
-        if response == "yes":
-            responses['yes'].append(f"{user['name']} ({user_id})")
-            # Track food choice if available
-            if 'food_choices' in user and user['food_choices']:
-                latest_date = max(user['food_choices'].keys())
-                food_choice = user['food_choices'][latest_date]
-                if food_choice not in responses['food_choices']:
-                    responses['food_choices'][food_choice] = []
-                responses['food_choices'][food_choice].append(f"{user['name']} ({user_id})")
-        else:
-            responses['no'].append(f"{user['name']} ({user_id})")
-
 async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
     """Send final summary at 10:00 AM"""
     job = context.job
@@ -751,7 +716,7 @@ async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
         pending = total_sent - yes_count - no_count
         
         summary = (
-            f"📊 Xabar yuborish natijalari:\n\n"
+            f"📊 Xabar yuborish yakuniy natijalari:\n\n"
             f"👥 Jami: {total_sent} kishi\n\n"
             f"📝 Ro'yxat:\n"
         )
