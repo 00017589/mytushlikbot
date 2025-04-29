@@ -47,7 +47,8 @@ def get_menu_items():
     if weekday in [0, 2, 4]:
         return [
             "Qovurma Lag'mon", "Jarkob", "Sokoro", "Do'lma",
-            "Osh", "Qovurma Makron", "Xonim", "Bifshteks"
+            "Osh", "Qovurma Makron", "Xonim", "Bifshteks",
+            "Lo'li kabob"
         ]
     # Tuesday (1), Thursday (3)
     else:
