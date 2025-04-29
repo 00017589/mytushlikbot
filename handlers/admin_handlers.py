@@ -62,7 +62,8 @@ KASSA_SUB_BTN = "Kassa ayrish"
     S_CARD_NUMBER,     # entering new card number
     S_CARD_OWNER,      # entering new card owner name
     S_NOTIFY_MESSAGE,  # entering notification message
-) = range(13)
+    S_NOTIFY_CONFIRM,  # confirming notification
+) = range(14)
 
 # ─── KEYBOARDS ─────────────────────────────────────────────────────────────────
 def get_admin_kb():
@@ -578,7 +579,7 @@ async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TY
         f"{update.message.text}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return ConversationHandler.END
+    return S_NOTIFY_CONFIRM
 
 async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -854,6 +855,8 @@ def register_handlers(app):
         states={
             S_NOTIFY_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message),
+            ],
+            S_NOTIFY_CONFIRM: [
                 CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
             ],
         },
