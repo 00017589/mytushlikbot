@@ -272,8 +272,11 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif is_test:
              logger.info(f"attendance_cb: TEST MODE - User {user.name} did NOT attend today, proceeding.")
 
+        # Get menu items based on day of week
+        menu_items = get_menu_items()
+        
         # Create keyboard with food options
-        keyboard = [[InlineKeyboardButton(item, callback_data=f"food:{item}")] for item in MENU_ITEMS]
+        keyboard = [[InlineKeyboardButton(item, callback_data=f"food:{item}")] for item in menu_items]
         if now.hour < 10:
             keyboard.append([InlineKeyboardButton("❌ Tushlikni bekor qilish", callback_data="cancel_lunch")])
         keyboard.append([InlineKeyboardButton("🔙 Ortga", callback_data="cancel_attendance")])
