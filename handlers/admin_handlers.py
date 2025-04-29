@@ -819,8 +819,8 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── 10) REGISTER ALL HANDLERS ─────────────────────────────────────────────────
 def register_handlers(app):
     # (1) plain commands
-    app.add_handler(CommandHandler("admin",       admin_panel))
-    app.add_handler(CommandHandler("notify_all",  notify_all))
+    app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("notify_all", notify_all))
     app.add_handler(CommandHandler("test_survey", test_survey))
 
     # (2) single‐step buttons
@@ -852,7 +852,10 @@ def register_handlers(app):
     notify_conv = ConversationHandler(
         entry_points=[CommandHandler("notify_all", notify_all)],
         states={
-            S_NOTIFY_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)],
+            S_NOTIFY_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message),
+                CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
+            ],
         },
         fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu)],
         allow_reentry=True
@@ -866,7 +869,6 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(adjust_balance_callback, pattern=r"^(adj_user:\d+|add_bal:\d+|sub_bal:\d+|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(delete_user_callback, pattern=r"^(delete_user:\d+|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back|back_to_menu)$"))
-    app.add_handler(CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$"))
     app.add_handler(CallbackQueryHandler(survey_confirm_callback, pattern=r"^survey_(confirm|cancel)$"))
 
     # Add lunch cancellation handlers
