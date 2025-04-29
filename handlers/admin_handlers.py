@@ -36,6 +36,13 @@ from utils import (
 )
 from config import DEFAULT_DAILY_PRICE
 
+# Initialize collections
+kassa_col = None
+
+async def init_collections():
+    global kassa_col
+    kassa_col = await get_collection("kassa")
+
 # Initialize logger
 logger = logging.getLogger(__name__)
 
@@ -143,16 +150,21 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 2) BACK TO MAIN MENU ───────────────────────────────────────────────────────
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    is_admin = await is_admin(update.effective_user.id)
+    """Return to the main menu"""
+    from utils import get_default_kb
+    
+    # Get user's admin status
+    user = await users_col.find_one({"telegram_id": update.effective_user.id})
+    is_admin = user and user.get("is_admin", False)
+    
+    # Get appropriate keyboard
     kb = get_default_kb(is_admin)
     
     if update.callback_query:
         # Handle callback query case
         await update.callback_query.answer()
-        await update.callback_query.message.delete()
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Bosh menyu:",
+        await update.callback_query.message.edit_text(
+            "Bosh menyu:",
             reply_markup=kb
         )
     else:
@@ -161,6 +173,8 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Bosh menyu:",
             reply_markup=kb
         )
+    
+    # Clear any conversation state
     return ConversationHandler.END
 
 # ─── 3) LIST USERS ──────────────────────────────────────────────────────────────
@@ -778,6 +792,7 @@ async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
         if 'notify_message_id' in context.user_data:
             del context.user_data['notify_message_id']
 
+# ─── TEST SURVEY ─────────────────────────────────────────────────────────────────
 async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
     if not caller or not caller.is_admin:
@@ -803,13 +818,29 @@ async def survey_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     
     from handlers.user_handlers import daily_attendance_request, send_summary
     try:
+        # First clean up any existing test data
+        await User.cleanup_old_food_choices(is_test=True)
+        
+        # Send the test survey
         await daily_attendance_request(context, is_test=True)
-        context.job_queue.run_once(send_summary, when=180, data={'is_test': True})
+        
+        # Schedule summary with proper cleanup
+        context.job_queue.run_once(
+            send_summary, 
+            when=180,  # 3 minutes
+            data={
+                'is_test': True,
+                'cleanup_after': True
+            },
+            name="test_survey_summary"
+        )
+        
         await query.message.edit_text(
             "✅ Test so'rovi yuborildi.\n"
             "⏳ 3 daqiqadan keyin natijalar yuboriladi."
         )
     except Exception as e:
+        logger.error(f"Error in test survey: {str(e)}")
         await query.message.edit_text(f"❌ Xatolik yuz berdi: {str(e)}")
 
 # ─── CONVERSATION HANDLERS ──────────────────────────────────────────────────────
@@ -982,6 +1013,9 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 10) REGISTER ALL HANDLERS ─────────────────────────────────────────────────
 def register_handlers(app):
+    # Initialize collections
+    app.job_queue.run_once(lambda _: init_collections(), when=0)
+    
     # (1) plain commands
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("test_survey", test_survey))
@@ -995,9 +1029,45 @@ def register_handlers(app):
         (ADJ_BAL_BTN, start_adjust_balance),
         (DELETE_USER_BTN,start_delete_user),
         (KASSA_BTN,    start_kassa_panel),
+        (CXL_LUNCH_ALL_BTN, cancel_lunch_day),
+        (CARD_MANAGE_BTN, start_card_management),
         (BACK_BTN,     back_to_menu),
     ]:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(txt)}$"), fn))
+
+    # Lunch cancellation conversation handler
+    cancel_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_ALL_BTN)}$"), cancel_lunch_day)],
+        states={
+            CANCEL_LUNCH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_date)],
+            CANCEL_LUNCH_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_reason)]
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True,
+        name="cancel_lunch_conversation",
+        per_message=True
+    )
+    app.add_handler(cancel_conv)
+
+    # Card management conversation handler
+    card_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_MANAGE_BTN)}$"), start_card_management)],
+        states={
+            S_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_number)],
+            S_CARD_OWNER: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_owner)]
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True,
+        name="card_management_conversation",
+        per_message=True
+    )
+    app.add_handler(card_conv)
 
     # Daily price conversation handler
     price_conv = ConversationHandler(
@@ -1078,40 +1148,6 @@ def register_handlers(app):
         per_message=True
     )
     app.add_handler(notify_conv)
-
-    # Card management conversation handler
-    card_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_MANAGE_BTN)}$"), start_card_management)],
-        states={
-            S_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_number)],
-            S_CARD_OWNER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_owner)],
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
-            CommandHandler("cancel", cancel_conversation)
-        ],
-        allow_reentry=True,
-        name="card_conversation",
-        per_message=True
-    )
-    app.add_handler(card_conv)
-
-    # Lunch cancellation conversation handler
-    cancel_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_ALL_BTN)}$"), cancel_lunch_day)],
-        states={
-            S_CANCEL_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_date)],
-            S_CANCEL_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_reason)],
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
-            CommandHandler("cancel", cancel_conversation)
-        ],
-        allow_reentry=True,
-        name="cancel_conversation",
-        per_message=True
-    )
-    app.add_handler(cancel_conv)
 
     # (3) inline callbacks
     app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^(add_admin:\d+|back_to_menu)$"))

@@ -490,13 +490,17 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
 
+    # Get test mode and cleanup flags from job data
+    job_data = context.job.data if context.job and context.job.data else {}
+    is_test_summary = job_data.get('is_test', False)
+    cleanup_after = job_data.get('cleanup_after', False)
+    
     # Skip weekends for non-test summaries
-    is_test_summary = context.job.data.get('is_test', False) if context.job and context.job.data else False
     if now.weekday() >= 5 and not is_test_summary:
         logger.info("Skipping summary on weekend.")
         return
 
-    logger.info(f"Running send_summary. is_test_summary = {is_test_summary}")
+    logger.info(f"Running send_summary. is_test_summary = {is_test_summary}, cleanup_after = {cleanup_after}")
 
     users = await get_all_users_async()
     attendees = []
@@ -596,9 +600,9 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to send user summary to {u.name}: {e}")
 
-    # For test summary, clean up immediately after sending to admins and users
-    if is_test_summary:
-        logger.info("Cleaning up test data immediately after test summary...")
+    # Clean up test data if requested
+    if cleanup_after and is_test_summary:
+        logger.info("Cleaning up test data after summary...")
         
         # First, clean up the test food choices
         await User.cleanup_old_food_choices(is_test=True)
@@ -614,7 +618,6 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Error cleaning up test data for user {user_id}: {e}")
         
         logger.info("Test data cleanup complete")
-        return  # Exit early for test summary
 
 async def check_debts(context: ContextTypes.DEFAULT_TYPE):
     """Check for users with debt > 50,000 and send notifications."""
