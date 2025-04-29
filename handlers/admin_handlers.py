@@ -61,7 +61,7 @@ KASSA_SUB_BTN = "Kassa ayrish"
     S_KASSA_REM,       # entering kassa− amount
     S_CARD_NUMBER,     # entering new card number
     S_CARD_OWNER,      # entering new card owner name
-    S_NOTIFY_MESSAGE,  # entering notification message
+    S_NOTIFY_MESSAGE,  # entering notification
     S_NOTIFY_CONFIRM,  # confirming notification
 ) = range(14)
 
@@ -569,15 +569,16 @@ async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TY
     # Store the message temporarily
     context.user_data['notify_message'] = update.message.text
     
-    # Add confirmation step
-    keyboard = [
+    # Add confirmation step with proper keyboard
+    keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Ha", callback_data="notify_confirm")],
         [InlineKeyboardButton("Yo'q", callback_data="notify_cancel")]
-    ]
+    ])
+    
     await update.message.reply_text(
         f"⚠️ Quyidagi xabarni barcha foydalanuvchilarga yuborishni tasdiqlaysizmi?\n\n"
         f"{update.message.text}",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=keyboard
     )
     return S_NOTIFY_CONFIRM
 
@@ -587,16 +588,31 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     
     if query.data == "notify_cancel":
         await query.message.edit_text("❌ Xabar yuborish bekor qilindi.")
-        return
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
     
     message = context.user_data.get('notify_message')
     if not message:
         await query.message.edit_text("❌ Xabar topilmadi. Iltimos, qaytadan boshlang.")
-        return
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
     
     cnt = 0
     failed = []
-    for u in await get_all_users_async():
+    users = await get_all_users_async()
+    
+    # First edit message to show progress
+    await query.message.edit_text("⏳ Xabar yuborilmoqda...")
+    
+    for u in users:
         try:
             await context.bot.send_message(
                 u.telegram_id,
@@ -606,14 +622,24 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             failed.append(f"{u.name} ({u.telegram_id})")
     
-    await query.message.edit_text(
-        f"✅ {cnt} foydalanuvchiga yuborildi.\n"
-        f"❌ {len(failed)} foydalanuvchiga yuborilmadi:\n" + "\n".join(failed)
+    result_text = f"✅ {cnt} foydalanuvchiga yuborildi."
+    if failed:
+        result_text += f"\n❌ {len(failed)} foydalanuvchiga yuborilmadi:\n" + "\n".join(failed)
+    
+    await query.message.edit_text(result_text)
+    
+    # Return to admin panel
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Admin panel:",
+        reply_markup=get_admin_kb()
     )
     
     # Clear the stored message
     if 'notify_message' in context.user_data:
         del context.user_data['notify_message']
+    
+    return ConversationHandler.END
 
 async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
