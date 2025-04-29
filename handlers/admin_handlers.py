@@ -1,14 +1,18 @@
 # handlers/admin_handlers.py
 
+import datetime
+import logging
 import re
+import pytz
+from datetime import datetime, timedelta
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    KeyboardButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
-
 from telegram.constants import ParseMode
 from telegram.ext import (
     ContextTypes,
@@ -18,13 +22,22 @@ from telegram.ext import (
     ConversationHandler,
     filters,
 )
-from handlers.user_handlers import is_admin as user_is_admin
+from pymongo import ReadPreference
+from database import users_col, get_collection
+
 from models.user_model import User
-from utils import get_user_async, get_all_users_async, get_default_kb
-from database import users_col, kassa_col
-import datetime
-import pytz
-from datetime import datetime, timedelta
+from utils import (
+    validate_name,
+    validate_phone,
+    get_default_kb,
+    get_user_async,
+    get_all_users_async,
+    user_is_admin,
+)
+from config import DEFAULT_DAILY_PRICE
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 # Add new constants for lunch cancellation
 CANCEL_LUNCH_DAY = "cancel_lunch_day"
@@ -50,20 +63,19 @@ KASSA_SUB_BTN = "Kassa ayrish"
 
 # ─── STATES ────────────────────────────────────────────────────────────────────
 (
-    S_ADMIN_ADD,
-    S_ADMIN_REM,
-    S_SET_PRICE,
-    S_ADJUST_USER,     # pick a user via Inline buttons
-    S_ADJUST_ACTION,   # Qo'shish/Ayrish
-    S_ADJUST_AMOUNT,   # numeric amount
-    S_DEL_USER,
-    S_KASSA,           # in Kassa submenu
-    S_KASSA_ADD,       # entering kassa+ amount
-    S_KASSA_REM,       # entering kassa− amount
-    S_CARD_NUMBER,     # entering new card number
-    S_CARD_OWNER,      # entering new card owner name
-    S_NOTIFY_MESSAGE,  # entering notification
-    S_NOTIFY_CONFIRM,  # confirming notification
+    S_ADD_ADMIN,      # selecting user to promote
+    S_REMOVE_ADMIN,   # selecting admin to demote
+    S_SET_PRICE,      # entering new daily price
+    S_ADJ_USER,       # selecting user to adjust balance
+    S_ADJ_AMOUNT,     # entering amount to adjust
+    S_DELETE_USER,    # selecting user to delete
+    S_KASSA_AMOUNT,   # entering kassa amount
+    S_CANCEL_DATE,    # entering date to cancel
+    S_CANCEL_REASON,  # entering reason for cancellation
+    S_NOTIFY_MESSAGE, # entering notification message
+    S_NOTIFY_CONFIRM, # confirming notification
+    S_CARD_NUMBER,    # entering new card number
+    S_CARD_OWNER,     # entering new card owner name
 ) = range(14)
 
 # ─── KEYBOARDS ─────────────────────────────────────────────────────────────────
@@ -1009,19 +1021,38 @@ def register_handlers(app):
     )
     app.add_handler(price_conv)
 
-    # Card management conversation handler
-    card_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_MANAGE_BTN)}$"), start_card_management)],
+    # Balance adjustment conversation handler
+    balance_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(ADJ_BAL_BTN)}$"), start_adjust_balance)],
         states={
-            S_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_number)],
-            S_CARD_OWNER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_owner)],
+            S_ADJ_USER: [CallbackQueryHandler(adjust_balance_callback, pattern=r"^(adj_user:\d+|back_to_menu)$")],
+            S_ADJ_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount)]
         },
-        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu)],
-        allow_reentry=True
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True,
+        name="balance_conversation"
     )
-    app.add_handler(card_conv)
+    app.add_handler(balance_conv)
 
-    # Notify all conversation handler - UPDATED
+    # Kassa conversation handler
+    kassa_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(KASSA_BTN)}$"), start_kassa_panel)],
+        states={
+            S_KASSA_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_kassa_amount)]
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True,
+        name="kassa_conversation"
+    )
+    app.add_handler(kassa_conv)
+
+    # Notify all conversation handler
     notify_conv = ConversationHandler(
         entry_points=[
             CommandHandler("notify_all", notify_all),
@@ -1044,6 +1075,38 @@ def register_handlers(app):
     )
     app.add_handler(notify_conv)
 
+    # Card management conversation handler
+    card_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_MANAGE_BTN)}$"), start_card_management)],
+        states={
+            S_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_number)],
+            S_CARD_OWNER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_owner)],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True,
+        name="card_conversation"
+    )
+    app.add_handler(card_conv)
+
+    # Lunch cancellation conversation handler
+    cancel_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_ALL_BTN)}$"), cancel_lunch_day)],
+        states={
+            S_CANCEL_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_date)],
+            S_CANCEL_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_reason)],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True,
+        name="cancel_conversation"
+    )
+    app.add_handler(cancel_conv)
+
     # (3) inline callbacks
     app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^(add_admin:\d+|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^(remove_admin:\d+|back_to_menu)$"))
@@ -1053,14 +1116,3 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(survey_confirm_callback, pattern=r"^survey_(confirm|cancel)$"))
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
-
-    # Add lunch cancellation handlers
-    cancel_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_ALL_BTN)}$"), cancel_lunch_day)],
-        states={
-            CANCEL_LUNCH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_date)],
-            CANCEL_LUNCH_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_reason)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-    )
-    app.add_handler(cancel_conv)
