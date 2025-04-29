@@ -283,6 +283,10 @@ async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.delete()
         return
     
+    if query.data == "back_to_price_list":
+        await start_daily_price(update, context)
+        return
+    
     if query.data.startswith("set_price:"):
         user_id = int(query.data.split(":")[1])
         user = await users_col.find_one({"telegram_id": user_id})
@@ -292,10 +296,12 @@ async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         context.user_data["pending_price"] = user_id
+        return S_SET_PRICE
 
 async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the daily price input"""
     if "pending_price" not in context.user_data:
-        return
+        return ConversationHandler.END
     
     try:
         price = int(update.message.text)
@@ -309,14 +315,16 @@ async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         user = await users_col.find_one({"telegram_id": user_id})
         await update.message.reply_text(
-            f"✅ {user['name']} uchun kunlik narx {price:,} so'mga o'zgartirildi!"
+            f"✅ {user['name']} uchun kunlik narx {price:,} so'mga o'zgartirildi!",
+            reply_markup=get_admin_kb()
         )
         
         del context.user_data["pending_price"]
-        await start_daily_price(update, context)
+        return ConversationHandler.END
         
     except ValueError:
         await update.message.reply_text("❌ Raqam kiriting!")
+        return S_SET_PRICE
 
 # ─── 6) DELETE USER ─────────────────────────────────────────────────────────────
 async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -995,6 +1003,20 @@ def register_handlers(app):
     ]:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(txt)}$"), fn))
 
+    # Daily price conversation handler
+    price_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
+        states={
+            S_SET_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price)],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True
+    )
+    app.add_handler(price_conv)
+
     # Card management conversation handler
     card_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_MANAGE_BTN)}$"), start_card_management)],
@@ -1065,58 +1087,46 @@ async def get_today_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Foydalanuvchilar topilmadi.")
             return
         
-        # Initialize counters
-        total = len(users)
-        yes_responses = []
-        no_responses = []
-        food_choices = {}
-        failed = []
-        
         # Get today's date in YYYY-MM-DD format
         today = datetime.now().strftime("%Y-%m-%d")
+        
+        # Initialize data structures
+        ordered_users = []
+        food_stats = {}
         
         # Process each user
         for user in users:
             try:
-                # Check if user has food choices for today
-                if 'food_choices' in user and today in user['food_choices']:
-                    yes_responses.append(f"{user['name']} ({user['telegram_id']})")
-                    food_choice = user['food_choices'][today]
-                    if food_choice not in food_choices:
-                        food_choices[food_choice] = []
-                    food_choices[food_choice].append(f"{user['name']} ({user['telegram_id']})")
-                else:
-                    failed.append(f"{user['name']} ({user['telegram_id']})")
+                if hasattr(user, 'food_choices') and today in user.food_choices:
+                    food = user.food_choices[today]
+                    ordered_users.append((user.name, food))
+                    food_stats[food] = food_stats.get(food, 0) + 1
             except Exception as e:
-                print(f"Error processing user {user['name']}: {e}")
-                failed.append(f"{user['name']} ({user['telegram_id']})")
+                print(f"Error processing user {user.name}: {e}")
         
         # Build summary
         summary = (
             f"📊 Bugungi tushlik uchun yig'ilish:\n\n"
-            f"👥 Jami: {total} kishi\n\n"
+            f"👥 Jami: {len(users)} kishi\n\n"
             f"📝 Ro'yxat:\n"
         )
         
-        # Add yes responses with their food choices
-        for i, user in enumerate(yes_responses, 1):
-            user_id = int(user.split("(")[1].split(")")[0])
-            user_obj = next((u for u in users if u['telegram_id'] == user_id), None)
-            if user_obj and 'food_choices' in user_obj and today in user_obj['food_choices']:
-                food = user_obj['food_choices'][today]
-                summary += f"{i}. {user.split(' (')[0]} - {food}\n"
+        # Add ordered users with their food choices
+        for i, (name, food) in enumerate(ordered_users, 1):
+            summary += f"{i}. {name} - {food}\n"
         
-        # Add food choices statistics
-        if food_choices:
+        # Add food statistics
+        if food_stats:
             summary += f"\n🍽 Taomlar statistikasi:\n"
-            for i, (food, users) in enumerate(food_choices.items(), 1):
-                summary += f"{i}. {food} — {len(users)} ta\n"
+            for i, (food, count) in enumerate(food_stats.items(), 1):
+                summary += f"{i}. {food} — {count} ta\n"
         
-        # Add pending responses
-        if failed:
+        # Add users who haven't ordered
+        not_ordered = [u.name for u in users if not (hasattr(u, 'food_choices') and today in u.food_choices)]
+        if not_ordered:
             summary += f"\n⏳ Javob bermaganlar:\n"
-            for i, user in enumerate(failed, 1):
-                summary += f"{i}. {user.split(' (')[0]}\n"
+            for i, name in enumerate(not_ordered, 1):
+                summary += f"{i}. {name}\n"
         
         # Send summary
         await update.message.reply_text(summary)
