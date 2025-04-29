@@ -1039,8 +1039,12 @@ def register_handlers(app):
     cancel_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_ALL_BTN)}$"), cancel_lunch_day)],
         states={
-            CANCEL_LUNCH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_date)],
-            CANCEL_LUNCH_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_reason)]
+            CANCEL_LUNCH_DATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_date)
+            ],
+            CANCEL_LUNCH_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_reason)
+            ]
         },
         fallbacks=[
             MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
@@ -1056,8 +1060,12 @@ def register_handlers(app):
     card_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_MANAGE_BTN)}$"), start_card_management)],
         states={
-            S_CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_number)],
-            S_CARD_OWNER: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_owner)]
+            S_CARD_NUMBER: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_number)
+            ],
+            S_CARD_OWNER: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_owner)
+            ]
         },
         fallbacks=[
             MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
@@ -1071,10 +1079,7 @@ def register_handlers(app):
 
     # Daily price conversation handler
     price_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price),
-            CallbackQueryHandler(daily_price_callback, pattern=r"^set_price:\d+$")
-        ],
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
         states={
             S_SET_PRICE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_daily_price),
@@ -1096,8 +1101,13 @@ def register_handlers(app):
     balance_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(ADJ_BAL_BTN)}$"), start_adjust_balance)],
         states={
-            S_ADJ_USER: [CallbackQueryHandler(adjust_balance_callback, pattern=r"^(adj_user:\d+|back_to_menu)$")],
-            S_ADJ_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount)]
+            S_ADJ_USER: [
+                CallbackQueryHandler(adjust_balance_callback, pattern=r"^adj_user:\d+$"),
+                CallbackQueryHandler(adjust_balance_callback, pattern=r"^back_to_menu$")
+            ],
+            S_ADJ_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_amount)
+            ]
         },
         fallbacks=[
             MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
@@ -1113,11 +1123,14 @@ def register_handlers(app):
     kassa_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(KASSA_BTN)}$"), start_kassa_panel)],
         states={
-            S_KASSA_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_kassa_amount)]
+            S_KASSA_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_kassa_amount)
+            ]
         },
         fallbacks=[
             MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
-            CommandHandler("cancel", cancel_conversation)
+            CommandHandler("cancel", cancel_conversation),
+            CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back)$")
         ],
         allow_reentry=True,
         name="kassa_conversation",
@@ -1133,7 +1146,7 @@ def register_handlers(app):
         ],
         states={
             S_NOTIFY_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_notify_message)
             ],
             S_NOTIFY_CONFIRM: [
                 CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
@@ -1149,13 +1162,10 @@ def register_handlers(app):
     )
     app.add_handler(notify_conv)
 
-    # (3) inline callbacks
-    app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^(add_admin:\d+|back_to_menu)$"))
-    app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^(remove_admin:\d+|back_to_menu)$"))
-    app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=r"^(set_price:\d+|back_to_menu|back_to_price_list)$"))
-    app.add_handler(CallbackQueryHandler(adjust_balance_callback, pattern=r"^(adj_user:\d+|add_bal:\d+|sub_bal:\d+|back_to_menu)$"))
-    app.add_handler(CallbackQueryHandler(delete_user_callback, pattern=r"^(delete_user:\d+|back_to_menu)$"))
-    app.add_handler(CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back|back_to_menu)$"))
+    # (3) inline callbacks - ONLY for callbacks not handled by conversation handlers
+    app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^add_admin:\d+$"))
+    app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
+    app.add_handler(CallbackQueryHandler(delete_user_callback, pattern=r"^delete_user:\d+$"))
     app.add_handler(CallbackQueryHandler(survey_confirm_callback, pattern=r"^survey_(confirm|cancel)$"))
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
 

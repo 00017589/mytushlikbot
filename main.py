@@ -5,6 +5,8 @@ import os
 import datetime
 import pytz
 import asyncio
+import socket
+import sys
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
@@ -20,6 +22,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+async def error_handler(update, context):
+    """Log Errors caused by Updates."""
+    logger.error(f"Update {update} caused error {context.error}")
+    
+    # Get the error's traceback
+    import traceback
+    traceback.print_exc()
+    
+    # Send error messages to admin
+    ADMIN_ID = 5192568051
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID, 
+            text=f"❌ Xatolik yuz berdi:\n\nXato: {context.error}\n\nTraceback: {traceback.format_exc()[:1000]}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to send error notification to admin: {e}")
+
+def check_single_instance():
+    """Ensure only one instance of the bot is running"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # Try to bind to port 6789 (or any unused port)
+        sock.bind(('localhost', 6789))
+    except socket.error:
+        logger.error("Bot is already running! Exiting.")
+        sys.exit(1)
+    return sock
+
 async def cleanup_old_data(context):
     """Cleanup job that runs at midnight"""
     logger.info("Running midnight cleanup job...")
@@ -29,6 +60,9 @@ async def cleanup_old_data(context):
 
 def main():
     """Main entrypoint: initialize DB, build app, register handlers, schedule jobs, and start polling."""
+    # 0) Check single instance
+    instance_lock = check_single_instance()
+    
     # 1) Load .env
     load_dotenv()
 
@@ -53,6 +87,9 @@ def main():
             .token(os.getenv("BOT_TOKEN", BOT_TOKEN))
             .build()
         )
+
+        # Add error handler
+        application.add_error_handler(error_handler)
 
         # 5) Import and register handlers now that app exists
         import handlers.user_handlers as uh
@@ -92,15 +129,14 @@ def main():
 
         logger.info("Bot is starting...")
         # 7) Start polling (this is blocking and manages its own loop)
-        application.run_polling()
+        application.run_polling(allowed_updates=["message", "callback_query"])
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        raise
     finally:
-        # Clean up the loop only after everything is done
-        loop.close()
+        # Clean up the socket
+        instance_lock.close()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.error(f"Error in main: {e}")
-        raise
+    main()
