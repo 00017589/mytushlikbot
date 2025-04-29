@@ -281,7 +281,12 @@ async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if query.data == "back_to_menu":
         await query.message.delete()
-        return
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
     
     if query.data == "back_to_price_list":
         await start_daily_price(update, context)
@@ -295,35 +300,50 @@ async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"{user['name']} uchun yangi kunlik narxni kiriting:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        context.user_data["pending_price"] = user_id
+        context.user_data["pending_price_user"] = user_id
         return S_SET_PRICE
 
 async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the daily price input"""
-    if "pending_price" not in context.user_data:
-        return ConversationHandler.END
-    
     try:
         price = int(update.message.text)
         if price < 0:
             raise ValueError
         
-        user_id = context.user_data["pending_price"]
+        user_id = context.user_data.get("pending_price_user")
+        if not user_id:
+            await update.message.reply_text(
+                "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+                reply_markup=get_admin_kb()
+            )
+            return ConversationHandler.END
+        
+        # Update user's daily price
         await users_col.update_one(
             {"telegram_id": user_id},
             {"$set": {"daily_price": price}}
         )
+        
+        # Get updated user info
         user = await users_col.find_one({"telegram_id": user_id})
+        
+        # Send confirmation and return to admin panel
         await update.message.reply_text(
             f"✅ {user['name']} uchun kunlik narx {price:,} so'mga o'zgartirildi!",
             reply_markup=get_admin_kb()
         )
         
-        del context.user_data["pending_price"]
+        # Clear the stored data
+        if "pending_price_user" in context.user_data:
+            del context.user_data["pending_price_user"]
+        
         return ConversationHandler.END
         
     except ValueError:
-        await update.message.reply_text("❌ Raqam kiriting!")
+        await update.message.reply_text(
+            "❌ Iltimos, to'g'ri raqam kiriting!",
+            reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+        )
         return S_SET_PRICE
 
 # ─── 6) DELETE USER ─────────────────────────────────────────────────────────────
@@ -1005,15 +1025,23 @@ def register_handlers(app):
 
     # Daily price conversation handler
     price_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
+        entry_points=[
+            MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price),
+            CallbackQueryHandler(daily_price_callback, pattern=r"^set_price:\d+$")
+        ],
         states={
-            S_SET_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price)],
+            S_SET_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_daily_price),
+                CallbackQueryHandler(daily_price_callback, pattern=r"^back_to_price_list$")
+            ]
         },
         fallbacks=[
             MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CallbackQueryHandler(daily_price_callback, pattern=r"^back_to_menu$"),
             CommandHandler("cancel", cancel_conversation)
         ],
-        allow_reentry=True
+        allow_reentry=True,
+        name="price_conversation"
     )
     app.add_handler(price_conv)
 
@@ -1097,17 +1125,17 @@ async def get_today_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Process each user
         for user in users:
             try:
-                if hasattr(user, 'food_choices') and today in user.food_choices:
-                    food = user.food_choices[today]
-                    ordered_users.append((user.name, food))
+                if 'food_choices' in user and today in user['food_choices']:
+                    food = user['food_choices'][today]
+                    ordered_users.append((user['name'], food))
                     food_stats[food] = food_stats.get(food, 0) + 1
             except Exception as e:
-                print(f"Error processing user {user.name}: {e}")
+                print(f"Error processing user {user['name']}: {e}")
         
         # Build summary
         summary = (
             f"📊 Bugungi tushlik uchun yig'ilish:\n\n"
-            f"👥 Jami: {len(users)} kishi\n\n"
+            f"👥 Jami: {len(ordered_users)} kishi\n\n"
             f"📝 Ro'yxat:\n"
         )
         
@@ -1118,11 +1146,12 @@ async def get_today_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add food statistics
         if food_stats:
             summary += f"\n🍽 Taomlar statistikasi:\n"
-            for i, (food, count) in enumerate(food_stats.items(), 1):
+            sorted_foods = sorted(food_stats.items(), key=lambda x: (-x[1], x[0]))
+            for i, (food, count) in enumerate(sorted_foods, 1):
                 summary += f"{i}. {food} — {count} ta\n"
         
         # Add users who haven't ordered
-        not_ordered = [u.name for u in users if not (hasattr(u, 'food_choices') and today in u.food_choices)]
+        not_ordered = [u['name'] for u in users if 'food_choices' not in u or today not in u['food_choices']]
         if not_ordered:
             summary += f"\n⏳ Javob bermaganlar:\n"
             for i, name in enumerate(not_ordered, 1):
