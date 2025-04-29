@@ -607,6 +607,7 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     
     cnt = 0
     failed = []
+    declined = []  # Track users who pressed "Yo'q"
     users = await get_all_users_async()
     
     # First edit message to show progress
@@ -614,14 +615,22 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     
     for u in users:
         try:
+            # Send message with inline keyboard for response
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Ha", callback_data=f"notify_response:yes:{u.telegram_id}")],
+                [InlineKeyboardButton("Yo'q", callback_data=f"notify_response:no:{u.telegram_id}")]
+            ])
             await context.bot.send_message(
                 u.telegram_id,
-                message
+                f"{message}\n\nJavob bering:",
+                reply_markup=keyboard
             )
             cnt += 1
         except Exception as e:
             failed.append(f"{u.name} ({u.telegram_id})")
     
+    # Wait for responses (you might want to add a timeout here)
+    # For now, we'll just show the initial results
     result_text = f"✅ {cnt} foydalanuvchiga yuborildi."
     if failed:
         result_text += f"\n❌ {len(failed)} foydalanuvchiga yuborilmadi:\n" + "\n".join(failed)
@@ -640,6 +649,33 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         del context.user_data['notify_message']
     
     return ConversationHandler.END
+
+async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user responses to notifications"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse the callback data
+    _, response, user_id = query.data.split(":")
+    user_id = int(user_id)
+    
+    # Get the user
+    user = await users_col.find_one({"telegram_id": user_id})
+    if not user:
+        return
+    
+    # Update the message to show the response
+    if response == "yes":
+        await query.message.edit_text(f"{query.message.text}\n\n✅ Siz javob berdingiz: Ha")
+    else:
+        await query.message.edit_text(f"{query.message.text}\n\n❌ Siz javob berdingiz: Yo'q")
+        
+        # Notify admin about the decline
+        admin_message = f"⚠️ {user['name']} xabarni rad etdi."
+        await context.bot.send_message(
+            chat_id=context.bot_data.get('admin_chat_id'),  # You'll need to set this somewhere
+            text=admin_message
+        )
 
 async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
@@ -905,6 +941,7 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(delete_user_callback, pattern=r"^(delete_user:\d+|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(survey_confirm_callback, pattern=r"^survey_(confirm|cancel)$"))
+    app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
 
     # Add lunch cancellation handlers
     cancel_conv = ConversationHandler(
