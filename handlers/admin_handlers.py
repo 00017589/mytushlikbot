@@ -847,7 +847,6 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register_handlers(app):
     # (1) plain commands
     app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(CommandHandler("notify_all", notify_all))
     app.add_handler(CommandHandler("test_survey", test_survey))
 
     # (2) single‐step buttons
@@ -875,19 +874,26 @@ def register_handlers(app):
     )
     app.add_handler(card_conv)
 
-    # Notify all conversation handler
+    # Notify all conversation handler - UPDATED
     notify_conv = ConversationHandler(
-        entry_points=[CommandHandler("notify_all", notify_all)],
+        entry_points=[
+            CommandHandler("notify_all", notify_all),
+            MessageHandler(filters.Regex(r"^/notify_all$"), notify_all)
+        ],
         states={
             S_NOTIFY_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)
             ],
             S_NOTIFY_CONFIRM: [
                 CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
-            ],
+            ]
         },
-        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu)],
-        allow_reentry=True
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
+            CommandHandler("cancel", cancel_conversation)
+        ],
+        allow_reentry=True,
+        name="notify_conversation"
     )
     app.add_handler(notify_conv)
 
