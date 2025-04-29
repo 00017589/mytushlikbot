@@ -1017,7 +1017,8 @@ def register_handlers(app):
             CommandHandler("cancel", cancel_conversation)
         ],
         allow_reentry=True,
-        name="price_conversation"
+        name="price_conversation",
+        per_message=True
     )
     app.add_handler(price_conv)
 
@@ -1033,7 +1034,8 @@ def register_handlers(app):
             CommandHandler("cancel", cancel_conversation)
         ],
         allow_reentry=True,
-        name="balance_conversation"
+        name="balance_conversation",
+        per_message=True
     )
     app.add_handler(balance_conv)
 
@@ -1048,7 +1050,8 @@ def register_handlers(app):
             CommandHandler("cancel", cancel_conversation)
         ],
         allow_reentry=True,
-        name="kassa_conversation"
+        name="kassa_conversation",
+        per_message=True
     )
     app.add_handler(kassa_conv)
 
@@ -1071,7 +1074,8 @@ def register_handlers(app):
             CommandHandler("cancel", cancel_conversation)
         ],
         allow_reentry=True,
-        name="notify_conversation"
+        name="notify_conversation",
+        per_message=True
     )
     app.add_handler(notify_conv)
 
@@ -1087,7 +1091,8 @@ def register_handlers(app):
             CommandHandler("cancel", cancel_conversation)
         ],
         allow_reentry=True,
-        name="card_conversation"
+        name="card_conversation",
+        per_message=True
     )
     app.add_handler(card_conv)
 
@@ -1103,7 +1108,8 @@ def register_handlers(app):
             CommandHandler("cancel", cancel_conversation)
         ],
         allow_reentry=True,
-        name="cancel_conversation"
+        name="cancel_conversation",
+        per_message=True
     )
     app.add_handler(cancel_conv)
 
@@ -1116,3 +1122,37 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back|back_to_menu)$"))
     app.add_handler(CallbackQueryHandler(survey_confirm_callback, pattern=r"^survey_(confirm|cancel)$"))
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
+
+async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    # Parse the callback data
+    _, response, user_id = query.data.split(":")
+    user_id = int(user_id)
+
+    # Get the user
+    user = await users_col.find_one({"telegram_id": user_id})
+    if not user:
+        return
+
+    # Update the message to show the response
+    if response == "yes":
+        await query.message.edit_text(f"{query.message.text}\n\n✅ Siz javob berdingiz: Ha")
+    else:
+        await query.message.edit_text(f"{query.message.text}\n\n❌ Siz javob berdingiz: Yo'q")
+
+    # Track the response
+    if 'notify_responses' in context.user_data:
+        responses = context.user_data['notify_responses']
+        if response == "yes":
+            responses['yes'].append(f"{user['name']} ({user_id})")
+            # Track food choice if available
+            if 'food_choices' in user and user['food_choices']:
+                latest_date = max(user['food_choices'].keys())
+                food_choice = user['food_choices'][latest_date]
+                if food_choice not in responses['food_choices']:
+                    responses['food_choices'][food_choice] = []
+                responses['food_choices'][food_choice].append(f"{user['name']} ({user_id})")
+        else:
+            responses['no'].append(f"{user['name']} ({user_id})")
