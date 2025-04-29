@@ -1008,7 +1008,6 @@ def register_handlers(app):
     # (1) plain commands
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("test_survey", test_survey))
-    app.add_handler(CommandHandler("today_summary", get_today_summary))
 
     # (2) single‐step buttons
     for txt, fn in [
@@ -1100,66 +1099,3 @@ def register_handlers(app):
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     app.add_handler(cancel_conv)
-
-async def get_today_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get today's summary again with the new format"""
-    try:
-        # Check if user is admin
-        if not await user_is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
-            return
-        
-        # Get all users
-        users = await get_all_users_async()
-        if not users:
-            await update.message.reply_text("❌ Foydalanuvchilar topilmadi.")
-            return
-        
-        # Get today's date in YYYY-MM-DD format
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        # Initialize data structures
-        ordered_users = []
-        food_stats = {}
-        
-        # Process each user
-        for user in users:
-            try:
-                if 'food_choices' in user and today in user['food_choices']:
-                    food = user['food_choices'][today]
-                    ordered_users.append((user['name'], food))
-                    food_stats[food] = food_stats.get(food, 0) + 1
-            except Exception as e:
-                print(f"Error processing user {user['name']}: {e}")
-        
-        # Build summary
-        summary = (
-            f"📊 Bugungi tushlik uchun yig'ilish:\n\n"
-            f"👥 Jami: {len(ordered_users)} kishi\n\n"
-            f"📝 Ro'yxat:\n"
-        )
-        
-        # Add ordered users with their food choices
-        for i, (name, food) in enumerate(ordered_users, 1):
-            summary += f"{i}. {name} - {food}\n"
-        
-        # Add food statistics
-        if food_stats:
-            summary += f"\n🍽 Taomlar statistikasi:\n"
-            sorted_foods = sorted(food_stats.items(), key=lambda x: (-x[1], x[0]))
-            for i, (food, count) in enumerate(sorted_foods, 1):
-                summary += f"{i}. {food} — {count} ta\n"
-        
-        # Add users who haven't ordered
-        not_ordered = [u['name'] for u in users if 'food_choices' not in u or today not in u['food_choices']]
-        if not_ordered:
-            summary += f"\n⏳ Javob bermaganlar:\n"
-            for i, name in enumerate(not_ordered, 1):
-                summary += f"{i}. {name}\n"
-        
-        # Send summary
-        await update.message.reply_text(summary)
-        
-    except Exception as e:
-        print(f"Error in get_today_summary: {e}")
-        await update.message.reply_text("❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
