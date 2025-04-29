@@ -75,8 +75,8 @@ KASSA_SUB_BTN = "Kassa ayrish"
     S_NOTIFY_MESSAGE, # entering notification message
     S_NOTIFY_CONFIRM, # confirming notification
     S_CARD_NUMBER,    # entering new card number
-    S_CARD_OWNER,     # entering new card owner name
-) = range(14)
+    S_CARD_OWNER      # entering new card owner name
+) = range(13)
 
 # ─── KEYBOARDS ─────────────────────────────────────────────────────────────────
 def get_admin_kb():
