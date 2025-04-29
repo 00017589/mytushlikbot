@@ -32,7 +32,7 @@ from utils import (
     get_default_kb,
     get_user_async,
     get_all_users_async,
-    user_is_admin,
+    is_admin,
 )
 from config import DEFAULT_DAILY_PRICE
 
@@ -143,7 +143,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 2) BACK TO MAIN MENU ───────────────────────────────────────────────────────
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    is_admin = await user_is_admin(update.effective_user.id)
+    is_admin = await is_admin(update.effective_user.id)
     kb = get_default_kb(is_admin)
     
     if update.callback_query:
@@ -838,7 +838,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─── LUNCH CANCELLATION HANDLERS ────────────────────────────────────────────────
 async def cancel_lunch_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the lunch cancellation process"""
-    if not await user_is_admin(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         await update.message.reply_text("Bu buyruq faqat adminlar uchun.")
         return
 

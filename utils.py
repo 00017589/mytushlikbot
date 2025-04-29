@@ -76,3 +76,8 @@ async def get_all_users_async() -> List[User]:
             _id         = doc.get("_id")
         ))
     return users
+
+async def is_admin(user_id):
+    from database import users_col
+    user = await users_col.find_one({"telegram_id": user_id})
+    return user and user.get("is_admin", False)
