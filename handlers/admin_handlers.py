@@ -24,6 +24,7 @@ from utils import get_user_async, get_all_users_async, get_default_kb
 from database import users_col, kassa_col
 import datetime
 import pytz
+from datetime import datetime, timedelta
 
 # Add new constants for lunch cancellation
 CANCEL_LUNCH_DAY = "cancel_lunch_day"
@@ -607,11 +608,23 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     
     cnt = 0
     failed = []
-    declined = []  # Track users who pressed "Yo'q"
     users = await get_all_users_async()
     
     # First edit message to show progress
     await query.message.edit_text("⏳ Xabar yuborilmoqda...")
+    
+    # Store message ID for later updates
+    context.user_data['notify_message_id'] = query.message.message_id
+    
+    # Initialize response tracking with food choices
+    context.user_data['notify_responses'] = {
+        'yes': [],
+        'no': [],
+        'total_sent': 0,
+        'failed': [],
+        'message': message,
+        'food_choices': {}  # Track food choices
+    }
     
     for u in users:
         try:
@@ -629,13 +642,28 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             failed.append(f"{u.name} ({u.telegram_id})")
     
-    # Wait for responses (you might want to add a timeout here)
-    # For now, we'll just show the initial results
+    # Update response tracking
+    context.user_data['notify_responses']['total_sent'] = cnt
+    context.user_data['notify_responses']['failed'] = failed
+    
+    # Show initial results
     result_text = f"✅ {cnt} foydalanuvchiga yuborildi."
     if failed:
         result_text += f"\n❌ {len(failed)} foydalanuvchiga yuborilmadi:\n" + "\n".join(failed)
     
     await query.message.edit_text(result_text)
+    
+    # Schedule final summary at 10:00 AM
+    now = datetime.now()
+    target_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    if now > target_time:
+        target_time += timedelta(days=1)
+    
+    delay = (target_time - now).total_seconds()
+    context.job_queue.run_once(send_final_summary, delay, data={
+        'chat_id': update.effective_chat.id,
+        'message_id': query.message.message_id
+    })
     
     # Return to admin panel
     await context.bot.send_message(
@@ -643,10 +671,6 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         text="Admin panel:",
         reply_markup=get_admin_kb()
     )
-    
-    # Clear the stored message
-    if 'notify_message' in context.user_data:
-        del context.user_data['notify_message']
     
     return ConversationHandler.END
 
@@ -669,13 +693,85 @@ async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT
         await query.message.edit_text(f"{query.message.text}\n\n✅ Siz javob berdingiz: Ha")
     else:
         await query.message.edit_text(f"{query.message.text}\n\n❌ Siz javob berdingiz: Yo'q")
+    
+    # Track the response
+    if 'notify_responses' in context.user_data:
+        responses = context.user_data['notify_responses']
+        if response == "yes":
+            responses['yes'].append(f"{user['name']} ({user_id})")
+            # Track food choice if available
+            if 'food_choices' in user and user['food_choices']:
+                latest_date = max(user['food_choices'].keys())
+                food_choice = user['food_choices'][latest_date]
+                if food_choice not in responses['food_choices']:
+                    responses['food_choices'][food_choice] = []
+                responses['food_choices'][food_choice].append(f"{user['name']} ({user_id})")
+        else:
+            responses['no'].append(f"{user['name']} ({user_id})")
+
+async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
+    """Send final summary at 10:00 AM"""
+    job = context.job
+    chat_id = job.data['chat_id']
+    message_id = job.data['message_id']
+    
+    if 'notify_responses' in context.user_data:
+        responses = context.user_data['notify_responses']
+        total_sent = responses['total_sent']
+        yes_count = len(responses['yes'])
+        no_count = len(responses['no'])
+        pending = total_sent - yes_count - no_count
         
-        # Notify admin about the decline
-        admin_message = f"⚠️ {user['name']} xabarni rad etdi."
-        await context.bot.send_message(
-            chat_id=context.bot_data.get('admin_chat_id'),  # You'll need to set this somewhere
-            text=admin_message
+        summary = (
+            f"📊 Xabar yuborish natijalari:\n\n"
+            f"👥 Jami: {total_sent} kishi\n\n"
+            f"📝 Ro'yxat:\n"
         )
+        
+        # Add yes responses
+        for i, user in enumerate(responses['yes'], 1):
+            summary += f"{i}. {user}\n"
+        
+        # Add food choices if available
+        if responses['food_choices']:
+            summary += f"\n🍽 Taomlar statistikasi:\n"
+            for food, users in responses['food_choices'].items():
+                summary += f"{len(users)}. {food} — {len(users)} ta\n"
+        
+        # Add no responses
+        if responses['no']:
+            summary += f"\n❌ Rad etganlar:\n"
+            for i, user in enumerate(responses['no'], 1):
+                summary += f"{i}. {user}\n"
+        
+        # Add pending responses
+        if pending > 0:
+            summary += f"\n⏳ Javob bermaganlar:\n"
+            all_users = set(f"{u['name']} ({u['telegram_id']})" for u in await get_all_users_async())
+            responded = set(responses['yes'] + responses['no'])
+            pending_users = all_users - responded
+            for i, user in enumerate(pending_users, 1):
+                summary += f"{i}. {user}\n"
+        
+        # Add failed deliveries
+        if responses['failed']:
+            summary += f"\n❌ Yuborilmadi:\n"
+            for i, user in enumerate(responses['failed'], 1):
+                summary += f"{i}. {user}\n"
+        
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=summary
+            )
+        except Exception as e:
+            print(f"Error sending final summary: {e}")
+        
+        # Clear the stored data
+        if 'notify_responses' in context.user_data:
+            del context.user_data['notify_responses']
+        if 'notify_message_id' in context.user_data:
+            del context.user_data['notify_message_id']
 
 async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
