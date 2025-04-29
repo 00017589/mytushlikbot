@@ -980,6 +980,7 @@ def register_handlers(app):
     # (1) plain commands
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("test_survey", test_survey))
+    app.add_handler(CommandHandler("today_summary", get_today_summary))
 
     # (2) single‐step buttons
     for txt, fn in [
@@ -1049,3 +1050,68 @@ def register_handlers(app):
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     app.add_handler(cancel_conv)
+
+async def get_today_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get today's summary again with the new format"""
+    # Check if user is admin
+    if not await user_is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    
+    # Get all users
+    users = await get_all_users_async()
+    
+    # Initialize counters
+    total = len(users)
+    yes_responses = []
+    no_responses = []
+    food_choices = {}
+    failed = []
+    
+    # Get today's date in YYYY-MM-DD format
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Process each user
+    for user in users:
+        try:
+            # Check if user has food choices for today
+            if 'food_choices' in user and today in user['food_choices']:
+                yes_responses.append(f"{user['name']} ({user['telegram_id']})")
+                food_choice = user['food_choices'][today]
+                if food_choice not in food_choices:
+                    food_choices[food_choice] = []
+                food_choices[food_choice].append(f"{user['name']} ({user['telegram_id']})")
+            else:
+                failed.append(f"{user['name']} ({user['telegram_id']})")
+        except Exception as e:
+            print(f"Error processing user {user['name']}: {e}")
+    
+    # Build summary
+    summary = (
+        f"📊 Bugungi tushlik uchun yig'ilish:\n\n"
+        f"👥 Jami: {total} kishi\n\n"
+        f"📝 Ro'yxat:\n"
+    )
+    
+    # Add yes responses with their food choices
+    for i, user in enumerate(yes_responses, 1):
+        user_id = int(user.split("(")[1].split(")")[0])
+        user_obj = next((u for u in users if u['telegram_id'] == user_id), None)
+        if user_obj and 'food_choices' in user_obj and today in user_obj['food_choices']:
+            food = user_obj['food_choices'][today]
+            summary += f"{i}. {user.split(' (')[0]} - {food}\n"
+    
+    # Add food choices statistics
+    if food_choices:
+        summary += f"\n🍽 Taomlar statistikasi:\n"
+        for i, (food, users) in enumerate(food_choices.items(), 1):
+            summary += f"{i}. {food} — {len(users)} ta\n"
+    
+    # Add pending responses
+    if failed:
+        summary += f"\n⏳ Javob bermaganlar:\n"
+        for i, user in enumerate(failed, 1):
+            summary += f"{i}. {user.split(' (')[0]}\n"
+    
+    # Send summary
+    await update.message.reply_text(summary)
