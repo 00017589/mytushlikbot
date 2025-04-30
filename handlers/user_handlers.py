@@ -505,6 +505,8 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     users = await get_all_users_async()
     attendees = []
     attendee_details = []  # List to store name and food choice pairs
+    non_attendees = []  # List to store names of users who didn't respond
+    declined_users = []  # List to store names of users who answered "No"
 
     logger.info(f"--- Generating Summary for {today} ---")
     for u in users:
@@ -512,6 +514,10 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
             attendees.append(u)
             food_choice = await u.get_food_choice(today, is_test=is_test_summary)
             attendee_details.append((u.name, food_choice))
+        elif today in u.declined_days:  # Check if user declined for today
+            declined_users.append(u.name)
+        else:
+            non_attendees.append(u.name)
 
     # Get food counts using the new aggregation method
     food_counts = await User.get_daily_food_counts(today, is_test=is_test_summary)
@@ -559,6 +565,18 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
             rank += 1
     else:
         admin_summary += "— Hech qanday taom tanlanmadi"
+    
+    # Add list of users who declined
+    if declined_users:
+        admin_summary += "\n\n❌ *Rad etganlar:*\n"
+        for i, name in enumerate(declined_users, 1):
+            admin_summary += f"{i}. {name}\n"
+    
+    # Add list of non-responders
+    if non_attendees:
+        admin_summary += "\n\n❓ *Javob bermaganlar:*\n"
+        for i, name in enumerate(non_attendees, 1):
+            admin_summary += f"{i}. {name}\n"
 
     # Send to admins
     for u_admin_check in users:
