@@ -5,8 +5,10 @@ import os
 import datetime
 import pytz
 import asyncio
-import socket
 import sys
+import atexit
+import fcntl
+import tempfile
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
@@ -41,15 +43,30 @@ async def error_handler(update, context):
         logger.error(f"Failed to send error notification to admin: {e}")
 
 def check_single_instance():
-    """Ensure only one instance of the bot is running"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    """Ensure only one instance of the bot is running using a file lock"""
+    lock_file = os.path.join(tempfile.gettempdir(), 'lunch_bot.lock')
+    lock_fd = open(lock_file, 'w')
+    
     try:
-        # Try to bind to port 6789 (or any unused port)
-        sock.bind(('localhost', 6789))
-    except socket.error:
+        # Try to acquire an exclusive lock
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Register cleanup function
+        atexit.register(lambda: cleanup_lock(lock_fd, lock_file))
+        return lock_fd
+    except IOError:
         logger.error("Bot is already running! Exiting.")
+        lock_fd.close()
         sys.exit(1)
-    return sock
+
+def cleanup_lock(lock_fd, lock_file):
+    """Clean up the lock file"""
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+    except Exception as e:
+        logger.error(f"Error cleaning up lock file: {e}")
 
 async def cleanup_old_data(context):
     """Cleanup job that runs at midnight"""
@@ -134,8 +151,8 @@ def main():
         logger.error(f"Fatal error: {e}")
         raise
     finally:
-        # Clean up the socket
-        instance_lock.close()
+        # Clean up the lock file
+        cleanup_lock(instance_lock, os.path.join(tempfile.gettempdir(), 'lunch_bot.lock'))
 
 
 if __name__ == "__main__":
