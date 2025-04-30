@@ -7,8 +7,13 @@ import pytz
 import asyncio
 import sys
 import atexit
-import msvcrt
 import tempfile
+
+# Cross-platform imports for file locking
+if os.name == 'nt':
+    import msvcrt
+else:
+    import fcntl
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
@@ -43,31 +48,32 @@ async def error_handler(update, context):
         logger.error(f"Failed to send error notification to admin: {e}")
 
 def check_single_instance():
-    """Ensure only one instance of the bot is running using a Windows-compatible file lock"""
+    """Ensure only one instance of the bot is running (cross-platform)"""
     lock_file = os.path.join(tempfile.gettempdir(), 'lunch_bot.lock')
     lock_fd = open(lock_file, 'w')
-    
     try:
-        # Try to acquire an exclusive lock using Windows file locking
-        msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
-        # Register cleanup function
+        if os.name == 'nt':
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         atexit.register(lambda: cleanup_lock(lock_fd, lock_file))
         return lock_fd
-    except IOError:
-        logger.error("Bot is already running! Exiting.")
+    except Exception:
         lock_fd.close()
+        logger.error("Bot is already running! Exiting.")
         sys.exit(1)
 
 def cleanup_lock(lock_fd, lock_file):
-    """Clean up the lock file"""
     try:
-        # Release the lock
-        msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+        if os.name == 'nt':
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
         lock_fd.close()
         if os.path.exists(lock_file):
             os.remove(lock_file)
-    except Exception as e:
-        logger.error(f"Error cleaning up lock file: {e}")
+    except Exception:
+        pass
 
 async def cleanup_old_data(context):
     """Cleanup job that runs at midnight"""
