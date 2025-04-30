@@ -7,7 +7,7 @@ import pytz
 import asyncio
 import sys
 import atexit
-import fcntl
+import msvcrt
 import tempfile
 
 from dotenv import load_dotenv
@@ -43,13 +43,13 @@ async def error_handler(update, context):
         logger.error(f"Failed to send error notification to admin: {e}")
 
 def check_single_instance():
-    """Ensure only one instance of the bot is running using a file lock"""
+    """Ensure only one instance of the bot is running using a Windows-compatible file lock"""
     lock_file = os.path.join(tempfile.gettempdir(), 'lunch_bot.lock')
     lock_fd = open(lock_file, 'w')
     
     try:
-        # Try to acquire an exclusive lock
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Try to acquire an exclusive lock using Windows file locking
+        msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
         # Register cleanup function
         atexit.register(lambda: cleanup_lock(lock_fd, lock_file))
         return lock_fd
@@ -61,7 +61,8 @@ def check_single_instance():
 def cleanup_lock(lock_fd, lock_file):
     """Clean up the lock file"""
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        # Release the lock
+        msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
         lock_fd.close()
         if os.path.exists(lock_file):
             os.remove(lock_file)
