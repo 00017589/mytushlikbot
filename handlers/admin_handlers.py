@@ -792,57 +792,6 @@ async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
         if 'notify_message_id' in context.user_data:
             del context.user_data['notify_message_id']
 
-# ─── TEST SURVEY ─────────────────────────────────────────────────────────────────
-async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    caller = await get_user_async(update.effective_user.id)
-    if not caller or not caller.is_admin:
-        return await update.message.reply_text("❌ Siz admin emassiz.")
-    
-    # Add confirmation step
-    keyboard = [
-        [InlineKeyboardButton("Ha", callback_data="survey_confirm")],
-        [InlineKeyboardButton("Yo'q", callback_data="survey_cancel")]
-    ]
-    await update.message.reply_text(
-        "⚠️ Test so'rovini boshlashni tasdiqlaysizmi? So'rov 3 daqiqadan keyin yakunlanadi.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def survey_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "survey_cancel":
-        await query.message.edit_text("❌ Test so'rovi bekor qilindi.")
-        return
-    
-    from handlers.user_handlers import daily_attendance_request, send_summary
-    try:
-        # First clean up any existing test data
-        await User.cleanup_old_food_choices(is_test=True)
-        
-        # Send the test survey
-        await daily_attendance_request(context, is_test=True)
-        
-        # Schedule summary with proper cleanup
-        context.job_queue.run_once(
-            send_summary, 
-            when=180,  # 3 minutes
-            data={
-                'is_test': True,
-                'cleanup_after': True
-            },
-            name="test_survey_summary"
-        )
-        
-        await query.message.edit_text(
-            "✅ Test so'rovi yuborildi.\n"
-            "⏳ 3 daqiqadan keyin natijalar yuboriladi."
-        )
-    except Exception as e:
-        logger.error(f"Error in test survey: {str(e)}")
-        await query.message.edit_text(f"❌ Xatolik yuz berdi: {str(e)}")
-
 # ─── CONVERSATION HANDLERS ──────────────────────────────────────────────────────
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel any ongoing conversation and return to admin panel"""
@@ -1018,7 +967,6 @@ def register_handlers(app):
     
     # (1) plain commands
     app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(CommandHandler("test_survey", test_survey))
 
     # (2) single‐step buttons
     for txt, fn in [
@@ -1166,39 +1114,3 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^add_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(delete_user_callback, pattern=r"^delete_user:\d+$"))
-    app.add_handler(CallbackQueryHandler(survey_confirm_callback, pattern=r"^survey_(confirm|cancel)$"))
-    app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
-
-async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    # Parse the callback data
-    _, response, user_id = query.data.split(":")
-    user_id = int(user_id)
-
-    # Get the user
-    user = await users_col.find_one({"telegram_id": user_id})
-    if not user:
-        return
-
-    # Update the message to show the response
-    if response == "yes":
-        await query.message.edit_text(f"{query.message.text}\n\n✅ Siz javob berdingiz: Ha")
-    else:
-        await query.message.edit_text(f"{query.message.text}\n\n❌ Siz javob berdingiz: Yo'q")
-
-    # Track the response
-    if 'notify_responses' in context.user_data:
-        responses = context.user_data['notify_responses']
-        if response == "yes":
-            responses['yes'].append(f"{user['name']} ({user_id})")
-            # Track food choice if available
-            if 'food_choices' in user and user['food_choices']:
-                latest_date = max(user['food_choices'].keys())
-                food_choice = user['food_choices'][latest_date]
-                if food_choice not in responses['food_choices']:
-                    responses['food_choices'][food_choice] = []
-                responses['food_choices'][food_choice].append(f"{user['name']} ({user_id})")
-        else:
-            responses['no'].append(f"{user['name']} ({user_id})")
