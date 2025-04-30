@@ -311,9 +311,12 @@ async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("Yo'q", callback_data=f"{NO}_test")
     ]]
 
+    # Get only admin users
     users = await get_all_users_async()
+    admin_users = [u for u in users if u.is_admin]
+    
     sent_count = 0
-    for u in users:
+    for u in admin_users:
         try:
             await context.bot.send_message(
                 chat_id=u.telegram_id,
@@ -324,7 +327,7 @@ async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to send test survey prompt to {u.name}: {e}")
             pass
-    logger.info(f"test_survey: Sent prompts to {sent_count} users.")
+    logger.info(f"test_survey: Sent prompts to {sent_count} admin users.")
 
     # Schedule summary for 3 minutes later, passing test flag in job data
     context.job_queue.run_once(send_summary, when=180, data={'is_test': True})
