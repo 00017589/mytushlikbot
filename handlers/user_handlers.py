@@ -298,41 +298,6 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.edit_text(f"{prefix}Siz bugun ro'yxatda emassiz.")
 
-async def test_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await user_is_admin(update.effective_user.id):
-        await update.message.reply_text("Bu buyruq faqat adminlar uchun.")
-        return
-
-    logger.info(f"--- test_survey START --- User: {update.effective_user.id}")
-    
-    # Add _test suffix to callback data for test survey
-    keyboard = [[
-        InlineKeyboardButton("Ha", callback_data=f"{YES}_test"),
-        InlineKeyboardButton("Yo'q", callback_data=f"{NO}_test")
-    ]]
-
-    # Get only admin users
-    users = await get_all_users_async()
-    admin_users = [u for u in users if u.is_admin]
-    
-    sent_count = 0
-    for u in admin_users:
-        try:
-            await context.bot.send_message(
-                chat_id=u.telegram_id,
-                text="⚠️ TEST: Bugun tushlikka borasizmi?",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            sent_count += 1
-        except Exception as e:
-            logger.error(f"Failed to send test survey prompt to {u.name}: {e}")
-            pass
-    logger.info(f"test_survey: Sent prompts to {sent_count} admin users.")
-
-    # Schedule summary for 3 minutes later, passing test flag in job data
-    context.job_queue.run_once(send_summary, when=180, data={'is_test': True})
-    logger.info(f"test_survey: Summary job scheduled.")
-
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
