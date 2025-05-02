@@ -1169,3 +1169,37 @@ def register_handlers(app):
     # Add notify response callback handler
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
     logger.info("notify response callback handler registered")
+
+async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user responses to notifications"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse the callback data
+    _, response, user_id = query.data.split(':')
+    user_id = int(user_id)
+    
+    # Get the user who responded
+    user = await get_user_async(user_id)
+    if not user:
+        return
+    
+    # Get the notification responses from context
+    if 'notify_responses' not in context.user_data:
+        return
+    
+    responses = context.user_data['notify_responses']
+    user_info = f"{user.name} ({user.telegram_id})"
+    
+    # Update the response tracking
+    if response == 'yes':
+        if user_info not in responses['yes']:
+            responses['yes'].append(user_info)
+    else:  # response == 'no'
+        if user_info not in responses['no']:
+            responses['no'].append(user_info)
+    
+    # Edit the message to remove the buttons
+    await query.message.edit_text(
+        f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
+    )
