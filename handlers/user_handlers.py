@@ -235,29 +235,34 @@ async def menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    logger.info(f"--- attendance_cb START --- Data: {query.data}")
+
+    # Get user and check if they exist
     user = await get_user_async(update.effective_user.id)
-    today = datetime.datetime.now(pytz.timezone("Asia/Tashkent")).strftime("%Y-%m-%d")
-    
-    # Determine if test based on callback data prefix
-    is_test = query.data.startswith("test_")
-    # Set/clear the flag in user_data for this user's context
-    if is_test:
-        context.user_data['test_mode'] = True
-        logger.info(f"attendance_cb: Test mode DETECTED via callback for User={user.name}. Setting user_data flag.")
-    else:
-        context.user_data.pop('test_mode', None)
-        logger.info(f"attendance_cb: Regular mode DETECTED via callback for User={user.name}. Ensuring user_data flag is clear.")
-        
-    # Log status
-    logger.info(f"attendance_cb: User={user.name}, Today={today}, IsTest={is_test}, UserData={context.user_data}")
-    
-    # Define now for hour check
+    if not user:
+        await query.message.edit_text("❌ Siz ro'yxatdan o'tmagansiz. /start buyrug'ini yuboring.")
+        return
+
+    # Get current time in Tashkent
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.datetime.now(tz)
-    
-    # Check for YES response (test_att_yes or att_yes)
+    today = now.strftime("%Y-%m-%d")
+
+    # Parse callback data
+    is_test = query.data.startswith("test_")
+    YES = "att_yes" if not is_test else "test_att_yes"
+    NO = "att_no" if not is_test else "test_att_no"
+
+    # Check for NO response
+    if query.data.endswith(NO):
+        # Remove any existing attendance or food choice
+        if today in user.attendance:
+            await user.remove_attendance(today, is_test=is_test)
+        # Record the decline
+        await user.decline_attendance(today)
+        await query.message.edit_text("❌ Bugungi tushlik rad etildi.")
+        return
+
+    # Check for YES response
     if query.data.endswith(YES):
         if today in user.attendance and not is_test:
             logger.warning(f"attendance_cb: Blocking regular user {user.name} who already attended today.")
@@ -271,7 +276,11 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await user.remove_attendance(today)
             logger.info(f"attendance_cb: TEST MODE - Previous attendance removed for {user.name}.")
         elif is_test:
-             logger.info(f"attendance_cb: TEST MODE - User {user.name} did NOT attend today, proceeding.")
+            logger.info(f"attendance_cb: TEST MODE - User {user.name} did NOT attend today, proceeding.")
+
+        # Remove any decline record if it exists
+        if today in user.declined_days:
+            await user.remove_decline(today)
 
         # Get menu items based on day of week
         menu_items = get_menu_items()
@@ -286,17 +295,6 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{prefix}🍽 Iltimos, taom tanlang:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    # Check for NO response (test_att_no or att_no)
-    elif query.data.endswith(NO):
-        prefix = "⚠️ TEST: " if is_test else ""
-        if today in user.attendance:
-            # Remove attendance only if it exists (relevant for test mode mainly)
-            await user.remove_attendance(today)
-            await query.message.edit_text(
-                f"{prefix}❌ {today} uchun buyurtma bekor qilindi. Balans: {user.balance} so'm."
-            )
-        else:
-            await query.message.edit_text(f"{prefix}Siz bugun ro'yxatda emassiz.")
 
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -432,25 +430,38 @@ async def low_balance_alert(context: ContextTypes.DEFAULT_TYPE):
                 pass
 
 async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
+    """Send morning attendance request to all users."""
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.datetime.now(tz)
-    if now.weekday() >= 5:
+    today = now.strftime("%Y-%m-%d")
+    
+    if now.weekday() >= 5:  # Skip weekends
+        logger.info("Skipping morning prompt on weekend.")
         return
 
     kb = [[
         InlineKeyboardButton("Ha", callback_data=YES),
         InlineKeyboardButton("Yo'q", callback_data=NO),
     ]]
+    
     users = await get_all_users_async()
+    logger.info(f"Sending morning prompt to {len(users)} users.")
+    
     for u in users:
         try:
+            # Clear any existing attendance or decline for today
+            if today in u.attendance:
+                await u.remove_attendance(today)
+            if today in u.declined_days:
+                await u.remove_decline(today)
+            
             await context.bot.send_message(
                 chat_id=u.telegram_id,
                 text="Bugun tushlikka borasizmi?",
                 reply_markup=InlineKeyboardMarkup(kb),
             )
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to send morning prompt to {u.name}: {e}")
 
 async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     """Send summary of today's attendance to admins and users."""

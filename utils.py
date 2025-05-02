@@ -54,6 +54,7 @@ async def get_user_async(telegram_id: int) -> Optional[User]:
         attendance  = doc.get("attendance", []),
         transactions= doc.get("transactions", []),
         is_admin    = bool(doc.get("is_admin")),
+        declined_days = doc.get("declined_days", []),
         created_at  = doc.get("created_at"),
         _id         = doc.get("_id")
     )
@@ -72,6 +73,7 @@ async def get_all_users_async() -> List[User]:
             attendance  = doc.get("attendance", []),
             transactions= doc.get("transactions", []),
             is_admin    = bool(doc.get("is_admin")),
+            declined_days = doc.get("declined_days", []),
             created_at  = doc.get("created_at"),
             _id         = doc.get("_id")
         ))
