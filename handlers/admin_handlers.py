@@ -604,23 +604,40 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the notification process"""
     try:
-        caller = await get_user_async(update.effective_user.id)
-        logger.info(f"notify_all: Checking admin status for user {update.effective_user.id}")
+        logger.info("notify_all: Command received")
+        
+        # Log the user who sent the command
+        user_id = update.effective_user.id
+        logger.info(f"notify_all: Command sent by user {user_id}")
+        
+        # Get user from database
+        caller = await get_user_async(user_id)
+        logger.info(f"notify_all: Database lookup result: {caller is not None}")
         
         if not caller:
-            logger.warning(f"notify_all: User {update.effective_user.id} not found in database")
-            return await update.message.reply_text("❌ Siz ro'yxatdan o'tmagansiz.")
+            logger.warning(f"notify_all: User {user_id} not found in database")
+            await update.message.reply_text("❌ Siz ro'yxatdan o'tmagansiz.")
+            return ConversationHandler.END
+        
+        # Log admin status
+        logger.info(f"notify_all: User {user_id} admin status: {caller.is_admin}")
         
         if not caller.is_admin:
-            logger.warning(f"notify_all: User {update.effective_user.id} is not an admin")
-            return await update.message.reply_text("❌ Siz admin emassiz.")
+            logger.warning(f"notify_all: User {user_id} is not an admin")
+            await update.message.reply_text("❌ Siz admin emassiz.")
+            return ConversationHandler.END
         
         logger.info(f"notify_all: Starting notification process for admin {caller.name}")
+        
+        # Send prompt message
         await update.message.reply_text(
             "⚠️ Barcha foydalanuvchilarga yubormoqchi bo'lgan xabarni kiriting:",
             reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
         )
+        
+        logger.info("notify_all: Prompt message sent, returning S_NOTIFY_MESSAGE state")
         return S_NOTIFY_MESSAGE
+        
     except Exception as e:
         logger.error(f"notify_all: Error occurred: {str(e)}", exc_info=True)
         await update.message.reply_text("❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
@@ -1001,6 +1018,10 @@ def register_handlers(app):
     
     # (1) plain commands
     app.add_handler(CommandHandler("admin", admin_panel))
+    
+    # Add notify_all command handler explicitly
+    app.add_handler(CommandHandler("notify_all", notify_all))
+    logger.info("notify_all command handler registered")
 
     # (2) single‐step buttons
     for txt, fn in [
@@ -1143,45 +1164,8 @@ def register_handlers(app):
         per_message=True
     )
     app.add_handler(notify_conv)
+    logger.info("notify conversation handler registered")
 
     # Add notify response callback handler
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
-
-    # (3) inline callbacks - ONLY for callbacks not handled by conversation handlers
-    app.add_handler(CallbackQueryHandler(add_admin_callback, pattern=r"^add_admin:\d+$"))
-    app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
-    app.add_handler(CallbackQueryHandler(delete_user_callback, pattern=r"^delete_user:\d+$"))
-
-async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user responses to notifications"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Parse the callback data
-    _, response, user_id = query.data.split(':')
-    user_id = int(user_id)
-    
-    # Get the user who responded
-    user = await get_user_async(user_id)
-    if not user:
-        return
-    
-    # Get the notification responses from context
-    if 'notify_responses' not in context.user_data:
-        return
-    
-    responses = context.user_data['notify_responses']
-    user_info = f"{user.name} ({user.telegram_id})"
-    
-    # Update the response tracking
-    if response == 'yes':
-        if user_info not in responses['yes']:
-            responses['yes'].append(user_info)
-    else:  # response == 'no'
-        if user_info not in responses['no']:
-            responses['no'].append(user_info)
-    
-    # Edit the message to remove the buttons
-    await query.message.edit_text(
-        f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
-    )
+    logger.info("notify response callback handler registered")
