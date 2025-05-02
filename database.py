@@ -59,6 +59,7 @@ async def init_db():
         
         # Create indexes
         await users_col.create_index("telegram_id", unique=True)
+        await users_col.create_index("user_id", sparse=True)  # for backward compatibility
         await users_col.create_index("is_admin")
         await users_col.create_index("attendance")
         await kassa_col.create_index("date", unique=True)
@@ -83,6 +84,24 @@ async def init_db():
                 "card_owner": "Abdukarimov Hasan"
             })
             
+        # Ensure declined_days field exists for all users
+        await users_col.update_many(
+            {"declined_days": {"$exists": False}},
+            {"$set": {"declined_days": []}}
+        )
+        
+        # Daily food choices collection
+        daily_food_choices = await get_collection("daily_food_choices")
+        await daily_food_choices.create_index([("telegram_id", 1), ("date", 1)], unique=True)
+        
+        # Test food choices collection (for test mode)
+        test_food_choices = await get_collection("test_food_choices")
+        await test_food_choices.create_index([("telegram_id", 1), ("date", 1)], unique=True)
+        
+        # Card details collection
+        card_details = await get_collection("card_details")
+        await card_details.create_index("card_number", unique=True)
+        
         print("Database initialized successfully")
     except Exception as e:
         print(f"Database initialization error: {e}")

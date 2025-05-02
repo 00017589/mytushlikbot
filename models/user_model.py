@@ -21,6 +21,7 @@ class User:
         transactions: list = None,
         is_admin: bool = False,
         created_at: datetime.datetime = None,
+        declined_days: list = None,
         _id: ObjectId = None,
         **kwargs
     ):
@@ -34,6 +35,7 @@ class User:
         self.transactions = transactions or []
         self.is_admin = is_admin
         self.created_at = created_at or datetime.datetime.utcnow()
+        self.declined_days = declined_days or []
 
     @classmethod
     async def create(cls, telegram_id, name, phone):
@@ -52,6 +54,8 @@ class User:
             "attendance": [],
             "transactions": [],
             "is_admin": False,
+            "declined_days": [],
+            "created_at": datetime.datetime.utcnow(),
         }
         await users_col.insert_one(doc)
         return cls(**doc)
@@ -71,6 +75,7 @@ class User:
             attendance   = raw.get("attendance", []),
             transactions = raw.get("transactions", []),
             is_admin     = raw.get("is_admin", False),
+            declined_days = raw.get("declined_days", []),
             _id          = raw["_id"],
         )
 
@@ -84,18 +89,21 @@ class User:
                 read_preference=ReadPreference.PRIMARY
             ).find({}):
             count += 1
-            yield User(
+            # Ensure all fields are properly handled with defaults
+            user = User(
                 telegram_id=doc["telegram_id"],
-                name=doc["name"],
-                phone=doc["phone"],
-                balance=doc.get("balance", 25000),
-                daily_price=doc.get("daily_price", 25000),
+                name=doc.get("name", ""),
+                phone=doc.get("phone", ""),
+                balance=doc.get("balance", DEFAULT_INITIAL_BALANCE),
+                daily_price=doc.get("daily_price", DEFAULT_DAILY_PRICE),
                 attendance=doc.get("attendance", []),
                 transactions=doc.get("transactions", []),
                 is_admin=doc.get("is_admin", False),
-                created_at=doc.get("created_at"),
+                declined_days=doc.get("declined_days", []),
+                created_at=doc.get("created_at", datetime.datetime.utcnow()),
                 _id=doc.get("_id")
             )
+            yield user
         logger.info(f"find_all: Finished fetching. Processed {count} documents from PRIMARY.")
 
     async def save(self):
@@ -113,6 +121,7 @@ class User:
                     "attendance": self.attendance,
                     "transactions": self.transactions,
                     "is_admin": self.is_admin,
+                    "declined_days": self.declined_days,
                 }},
                 upsert=False
             )
@@ -258,3 +267,15 @@ class User:
         self.is_admin = False
         self._record_txn("admin", 0, "Demoted from admin")
         await self.save()
+
+    async def decline_attendance(self, date_str: str):
+        """Record that user declined lunch for a specific date"""
+        if date_str not in self.declined_days:
+            self.declined_days.append(date_str)
+            await self.save()
+
+    async def remove_decline(self, date_str: str):
+        """Remove decline record for a specific date"""
+        if date_str in self.declined_days:
+            self.declined_days.remove(date_str)
+            await self.save()
