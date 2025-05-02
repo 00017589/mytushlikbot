@@ -602,15 +602,29 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 9) BROADCAST & TEST SURVEY ─────────────────────────────────────────────────
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    caller = await get_user_async(update.effective_user.id)
-    if not caller or not caller.is_admin:
-        return await update.message.reply_text("❌ Siz admin emassiz.")
-    
-    await update.message.reply_text(
-        "⚠️ Barcha foydalanuvchilarga yubormoqchi bo'lgan xabarni kiriting:",
-        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
-    )
-    return S_NOTIFY_MESSAGE
+    """Start the notification process"""
+    try:
+        caller = await get_user_async(update.effective_user.id)
+        logger.info(f"notify_all: Checking admin status for user {update.effective_user.id}")
+        
+        if not caller:
+            logger.warning(f"notify_all: User {update.effective_user.id} not found in database")
+            return await update.message.reply_text("❌ Siz ro'yxatdan o'tmagansiz.")
+        
+        if not caller.is_admin:
+            logger.warning(f"notify_all: User {update.effective_user.id} is not an admin")
+            return await update.message.reply_text("❌ Siz admin emassiz.")
+        
+        logger.info(f"notify_all: Starting notification process for admin {caller.name}")
+        await update.message.reply_text(
+            "⚠️ Barcha foydalanuvchilarga yubormoqchi bo'lgan xabarni kiriting:",
+            reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+        )
+        return S_NOTIFY_MESSAGE
+    except Exception as e:
+        logger.error(f"notify_all: Error occurred: {str(e)}", exc_info=True)
+        await update.message.reply_text("❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
+        return ConversationHandler.END
 
 async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the notification message input"""
@@ -663,6 +677,9 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     cnt = 0
     failed = []
     users = await get_all_users_async()
+    total_users = len(users)
+    
+    logger.info(f"Starting to send notification to {total_users} users")
     
     # First edit message to show progress
     await query.message.edit_text("⏳ Xabar yuborilmoqda...")
@@ -670,16 +687,17 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     # Store message ID for later updates
     context.user_data['notify_message_id'] = query.message.message_id
     
-    # Initialize response tracking with food choices
+    # Initialize response tracking
     context.user_data['notify_responses'] = {
         'yes': [],
         'no': [],
         'total_sent': 0,
         'failed': [],
         'message': message,
-        'food_choices': {}  # Track food choices
+        'food_choices': {}
     }
     
+    # Send to each user with retry logic
     for u in users:
         try:
             # Send message with inline keyboard for response
@@ -687,13 +705,29 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 [InlineKeyboardButton("Ha", callback_data=f"notify_response:yes:{u.telegram_id}")],
                 [InlineKeyboardButton("Yo'q", callback_data=f"notify_response:no:{u.telegram_id}")]
             ])
-            await context.bot.send_message(
-                u.telegram_id,
-                f"{message}\n\nJavob bering:",
-                reply_markup=keyboard
-            )
-            cnt += 1
+            
+            # Try to send message with retry
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    await context.bot.send_message(
+                        u.telegram_id,
+                        f"{message}\n\nJavob bering:",
+                        reply_markup=keyboard
+                    )
+                    cnt += 1
+                    logger.info(f"Successfully sent message to user {u.name} ({u.telegram_id})")
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:  # Last attempt
+                        logger.error(f"Failed to send message to user {u.name} ({u.telegram_id}) after {max_retries} attempts: {str(e)}")
+                        failed.append(f"{u.name} ({u.telegram_id})")
+                    else:
+                        logger.warning(f"Retry {attempt + 1}/{max_retries} for user {u.name} ({u.telegram_id})")
+                        await asyncio.sleep(1)  # Wait before retry
+                        
         except Exception as e:
+            logger.error(f"Error processing user {u.name} ({u.telegram_id}): {str(e)}")
             failed.append(f"{u.name} ({u.telegram_id})")
     
     # Update response tracking
@@ -701,7 +735,7 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     context.user_data['notify_responses']['failed'] = failed
     
     # Show initial results
-    result_text = f"✅ {cnt} foydalanuvchiga yuborildi."
+    result_text = f"✅ {cnt}/{total_users} foydalanuvchiga yuborildi."
     if failed:
         result_text += f"\n❌ {len(failed)} foydalanuvchiga yuborilmadi:\n" + "\n".join(failed)
     
