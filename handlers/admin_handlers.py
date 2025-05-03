@@ -56,11 +56,10 @@ FOYD_BTN      = "Foydalanuvchilar"
 ADD_ADMIN_BTN = "Admin Qo'shish"
 REMOVE_ADMIN_BTN = "Admin olib tashlash"
 DAILY_PRICE_BTN = "Kunlik narx"
-ADJ_BAL_BTN   = "Balansni o'zgartirish"
 DELETE_USER_BTN = "Foydalanuvchini o'chirish"
 CXL_LUNCH_ALL_BTN = "Tushlikni bekor qilish"
-KASSA_BTN     = "Kassa"
 CARD_MANAGE_BTN = "Karta ma'lumotlarini o'zgartirish"
+KASSA_BTN = "Kassa"
 BACK_BTN      = "Ortga"
 
 # ─── KASSA SUBMENU BUTTONS ─────────────────────────────────────────────────────
@@ -90,10 +89,10 @@ def get_admin_kb():
     return ReplyKeyboardMarkup([
         [FOYD_BTN],
         [ADD_ADMIN_BTN, REMOVE_ADMIN_BTN],
-        [DAILY_PRICE_BTN, ADJ_BAL_BTN],
+        [DAILY_PRICE_BTN],
         [DELETE_USER_BTN, CXL_LUNCH_ALL_BTN],
-        [KASSA_BTN],
         [CARD_MANAGE_BTN],
+        [KASSA_BTN],
         [BACK_BTN],
     ], resize_keyboard=True)
 
@@ -415,190 +414,67 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=get_admin_kb()
         )
 
-# ─── 7) KASSA PANEL & ACTIONS ─────────────────────────────────────────────────
-async def start_kassa_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    doc = await kassa_col.find_one({}) or {}
-    bal = doc.get("balance", 0)
+# ─── 7) CARD MANAGEMENT ─────────────────────────────────────────────────────────
+async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the card management flow"""
+    await update.message.reply_text(
+        "Yangi karta raqamini kiriting:",
+        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+    )
+    return S_CARD_NUMBER
+
+async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the new card number input"""
+    if update.message.text == BACK_BTN:
+        await update.message.reply_text(
+            "Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
     
-    keyboard = [
-        [
-            InlineKeyboardButton("Qo'shish", callback_data="kassa_add"),
-            InlineKeyboardButton("Ayrish", callback_data="kassa_sub")
-        ],
-        [InlineKeyboardButton("Ortga", callback_data="back_to_menu")]
-    ]
+    # Store the card number temporarily
+    context.user_data['new_card_number'] = update.message.text
     
     await update.message.reply_text(
-        f"Kassa balansi: {bal:,} so'm\n"
-        "Qo'shish yoki Ayrish tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "Karta egasining ismini kiriting:",
+        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
     )
+    return S_CARD_OWNER
 
-async def kassa_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "back_to_menu":
-        await query.message.delete()
-        return
-    
-    if query.data == "kassa_add":
-        keyboard = [[InlineKeyboardButton("Ortga", callback_data="kassa_back")]]
-        await query.message.edit_text(
-            "Summani raqamda kiriting:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the new card owner name input and save both to database"""
+    if update.message.text == BACK_BTN:
+        await update.message.reply_text(
+            "Admin panel:",
+            reply_markup=get_admin_kb()
         )
-        context.user_data["pending_kassa"] = "add"
+        return ConversationHandler.END
     
-    elif query.data == "kassa_sub":
-        keyboard = [[InlineKeyboardButton("Ortga", callback_data="kassa_back")]]
-        await query.message.edit_text(
-            "Summani raqamda kiriting:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        context.user_data["pending_kassa"] = "sub"
+    from database import get_collection
     
-    elif query.data == "kassa_back":
-        await start_kassa_panel(update, context)
-
-async def handle_kassa_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "pending_kassa" not in context.user_data:
-        return
+    card_details_col = await get_collection("card_details")
     
-    try:
-        amount = int(update.message.text)
-        if amount == 0:  # Only prevent zero amounts
-            raise ValueError
-        
-        action = context.user_data["pending_kassa"]
-        doc = await kassa_col.find_one({}) or {"balance": 0}
-        current_balance = doc.get("balance", 0)
-        
-        if action == "add":
-            new_balance = current_balance + amount
-            await kassa_col.update_one(
-                {},
-                {"$set": {"balance": new_balance}},
-                upsert=True
-            )
-            await update.message.reply_text(
-                f"✅ Kassa balansiga +{amount:,} so'm qo'shildi.\n"
-                f"Yangi balans: {new_balance:,} so'm"
-            )
-        else:
-            new_balance = current_balance - amount
-            await kassa_col.update_one(
-                {},
-                {"$set": {"balance": new_balance}},
-                upsert=True
-            )
-            await update.message.reply_text(
-                f"✅ Kassa balansidan -{amount:,} so'm ayirildi.\n"
-                f"Yangi balans: {new_balance:,} so'm"
-            )
-        
-        del context.user_data["pending_kassa"]
-        await start_kassa_panel(update, context)
-        
-    except ValueError:
-        await update.message.reply_text("❌ Raqam kiriting!")
-
-# ─── BALANCE ADJUSTMENT ─────────────────────────────────────────────────────
-async def start_adjust_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = await users_col.find().to_list(length=None)
-    keyboard = []
-    for user in users:
-        keyboard.append([InlineKeyboardButton(
-            f"{user['name']} ({user['balance']:,} so'm)",
-            callback_data=f"adj_user:{user['telegram_id']}"
-        )])
-    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
+    # Update or insert new card details
+    await card_details_col.update_one(
+        {},  # empty filter to match any document
+        {
+            "$set": {
+                "card_number": context.user_data['new_card_number'],
+                "card_owner": update.message.text
+            }
+        },
+        upsert=True  # create if doesn't exist
+    )
+    
+    # Clear temporary data
+    if 'new_card_number' in context.user_data:
+        del context.user_data['new_card_number']
     
     await update.message.reply_text(
-        "Balansni o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "✅ Karta ma'lumotlari muvaffaqiyatli o'zgartirildi!",
+        reply_markup=get_admin_kb()
     )
-
-async def adjust_balance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "back_to_menu":
-        await query.message.delete()
-        return
-    
-    if query.data.startswith("adj_user:"):
-        user_id = int(query.data.split(":")[1])
-        user = await users_col.find_one({"telegram_id": user_id})
-        keyboard = [
-            [
-                InlineKeyboardButton("Qo'shish", callback_data=f"add_bal:{user_id}"),
-                InlineKeyboardButton("Ayrish", callback_data=f"sub_bal:{user_id}")
-            ],
-            [InlineKeyboardButton("Ortga", callback_data="back_to_menu")]
-        ]
-        await query.message.edit_text(
-            f"{user['name']} balansi: {user['balance']:,} so'm\n"
-            "Qo'shish yoki Ayrish tanlang:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    elif query.data.startswith(("add_bal:", "sub_bal:")):
-        action, user_id = query.data.split(":")
-        user_id = int(user_id)
-        user = await users_col.find_one({"telegram_id": user_id})
-        
-        keyboard = [[InlineKeyboardButton("Ortga", callback_data=f"adj_user:{user_id}")]]
-        await query.message.edit_text(
-            f"{user['name']} balansi: {user['balance']:,} so'm\n"
-            "Summani raqamda kiriting:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        context.user_data["pending_amount"] = {
-            "user_id": user_id,
-            "action": "add" if action == "add_bal" else "sub"
-        }
-
-async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "pending_amount" not in context.user_data:
-        return
-    
-    try:
-        amount = int(update.message.text)
-        if amount == 0:  # Only prevent zero amounts
-            raise ValueError
-        
-        data = context.user_data["pending_amount"]
-        user_id = data["user_id"]
-        action = data["action"]
-        
-        user = await users_col.find_one({"telegram_id": user_id})
-        if action == "add":
-            new_balance = user["balance"] + amount
-            await users_col.update_one(
-                {"telegram_id": user_id},
-                {"$set": {"balance": new_balance}}
-            )
-            await update.message.reply_text(
-                f"✅ {user['name']} balansiga +{amount:,} so'm qo'shildi.\n"
-                f"Yangi balans: {new_balance:,} so'm"
-            )
-        else:
-            new_balance = user["balance"] - amount
-            await users_col.update_one(
-                {"telegram_id": user_id},
-                {"$set": {"balance": new_balance}}
-            )
-            await update.message.reply_text(
-                f"✅ {user['name']} balansidan -{amount:,} so'm ayirildi.\n"
-                f"Yangi balans: {new_balance:,} so'm"
-            )
-        
-        del context.user_data["pending_amount"]
-        await start_adjust_balance(update, context)
-        
-    except ValueError:
-        await update.message.reply_text("❌ Raqam kiriting!")
+    return ConversationHandler.END
 
 # ─── 9) BROADCAST & TEST SURVEY ─────────────────────────────────────────────────
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -738,7 +614,6 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 except Exception as e:
                     if attempt == max_retries - 1:  # Last attempt
                         logger.error(f"Failed to send message to user {u.name} ({u.telegram_id}) after {max_retries} attempts: {str(e)}")
-                        failed.append(f"{u.name} ({u.telegram_id})")
                     else:
                         logger.warning(f"Retry {attempt + 1}/{max_retries} for user {u.name} ({u.telegram_id})")
                         await asyncio.sleep(1)  # Wait before retry
@@ -1045,46 +920,134 @@ async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT
         f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
     )
 
-async def sync_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to sync user balances from Google Sheets."""
-    logger = logging.getLogger(__name__)
-    logger.info("/sync_balances command triggered")
+async def show_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current kassa amount from Google Sheets"""
     try:
-        user_id = update.effective_user.id
-        caller = await get_user_async(user_id)
-        logger.info(f"User {user_id} called /sync_balances. Admin: {caller.is_admin if caller else 'N/A'}")
-        if not caller or not caller.is_admin:
-            await update.message.reply_text("❌ Siz admin emassiz.")
-            return
+        # Get the worksheet
+        worksheet = await get_worksheet()
+        if not worksheet:
+            await update.message.reply_text("❌ Google Sheets bilan bog'lanishda xatolik yuz berdi.")
+            return ConversationHandler.END
 
-        await update.message.reply_text("⏳ Google Sheets'dan balanslar yuklanmoqda...")
-        rows = fetch_all_rows()
-        logger.info(f"Fetched {len(rows)} rows from Google Sheets.")
-        updated = 0
-        not_found = []
-        for row in rows:
-            telegram_id = row.get('telegram_id')
-            balance = row.get('balance')
-            logger.info(f"Processing row: telegram_id={telegram_id}, balance={balance}")
-            if not telegram_id or balance is None:
-                continue
-            try:
-                user = await get_user_async(int(telegram_id))
-                if user:
-                    user.balance = float(str(balance).replace(',', ''))
-                    await user.save()
-                    updated += 1
-                else:
-                    not_found.append(str(telegram_id))
-            except Exception as e:
-                logger.error(f"Error updating user {telegram_id}: {e}")
-        msg = f"✅ {updated} ta foydalanuvchi balansi yangilandi."
-        if not_found:
-            msg += f"\n❗ Topilmadi: {', '.join(not_found)}"
-        await update.message.reply_text(msg)
+        # Get all values
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            await update.message.reply_text("❌ Ma'lumotlar topilmadi.")
+            return ConversationHandler.END
+
+        # Find kassa value (assuming it's in the last column)
+        kassa_value = None
+        for row in all_values[1:]:  # Skip header row
+            if len(row) >= 5:  # Assuming kassa is in column E (5th column)
+                try:
+                    kassa_value = float(row[4].replace(',', ''))  # Convert to float, handle comma-separated numbers
+                    break
+                except (ValueError, IndexError):
+                    continue
+
+        if kassa_value is None:
+            await update.message.reply_text("❌ Kassa miqdori topilmadi.")
+            return ConversationHandler.END
+
+        # Format and send the message
+        message = f"💰 *Kassa miqdori:* {kassa_value:,.0f} so'm"
+        await update.message.reply_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
+
     except Exception as e:
-        logger.error(f"/sync_balances error: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Xatolik: {e}")
+        logger.error(f"Error showing kassa: {str(e)}")
+        await update.message.reply_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
+
+async def send_summary():
+    """Send daily summary to admin"""
+    try:
+        # Get current date in Tashkent
+        tz = pytz.timezone('Asia/Tashkent')
+        now = datetime.now(tz)
+        today = now.strftime('%Y-%m-%d')
+        
+        # Get all users
+        users = await get_all_users_async()
+        if not users:
+            logger.warning("No users found for summary")
+            return
+            
+        # Get all food choices for today
+        food_choices = await get_food_choices_for_date(today)
+        
+        # Count statistics
+        total_users = len(users)
+        attending_users = sum(1 for u in users if u.attendance and today in u.attendance)
+        declined_users = sum(1 for u in users if u.declined_days and today in u.declined_days)
+        no_response = total_users - attending_users - declined_users
+        
+        # Group food choices
+        food_stats = {}
+        for choice in food_choices:
+            food_name = choice.get('food_name', 'Unknown')
+            food_stats[food_name] = food_stats.get(food_name, 0) + 1
+            
+        # Format message
+        message = f"📊 *Daily Summary for {today}*\n\n"
+        message += f"👥 Total Users: {total_users}\n"
+        message += f"✅ Attending: {attending_users}\n"
+        message += f"❌ Declined: {declined_users}\n"
+        message += f"⏳ No Response: {no_response}\n\n"
+        
+        if food_stats:
+            message += "*Food Choices:*\n"
+            for food, count in food_stats.items():
+                message += f"• {food}: {count}\n"
+                
+        # Send to all admins
+        for user in users:
+            if user.is_admin:
+                try:
+                    await bot.send_message(
+                        user.telegram_id,
+                        message,
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending summary to admin {user.telegram_id}: {str(e)}")
+        
+        # Update Google Sheets with new balances
+        for user in users:
+            if user.attendance and today in user.attendance:
+                # Deduct daily price from balance
+                user.balance -= user.daily_price
+                user.save()
+                
+                # Update balance in Google Sheets
+                await update_user_balance_in_sheet(user.telegram_id, user.balance)
+                
+        # Sync all balances from sheet to ensure consistency
+        sync_result = await sync_balances_from_sheet()
+        if not sync_result.get('success'):
+            logger.error(f"Error syncing balances after summary: {sync_result.get('error')}")
+            
+    except Exception as e:
+        logger.error(f"Error in send_summary: {str(e)}")
+
+async def hourly_sync_balances():
+    """Sync balances from Google Sheets to database every hour"""
+    try:
+        logger.info("Starting hourly balance sync from Sheets")
+        result = await sync_balances_from_sheet()
+        if result.get('success'):
+            logger.info(f"Hourly sync completed: {result['updated']} users updated, {result['errors']} errors")
+        else:
+            logger.error(f"Hourly sync failed: {result.get('error')}")
+    except Exception as e:
+        logger.error(f"Error in hourly sync: {str(e)}")
 
 # ─── 10) REGISTER ALL HANDLERS ─────────────────────────────────────────────────
 def register_handlers(app):
@@ -1098,19 +1061,16 @@ def register_handlers(app):
     app.add_handler(CommandHandler("notify_all", notify_all))
     logger.info("notify_all command handler registered")
 
-    app.add_handler(CommandHandler("sync_balances", sync_balances))
-
     # (2) single‐step buttons
     for txt, fn in [
         (FOYD_BTN,     list_users_exec),
         (ADD_ADMIN_BTN,start_add_admin),
         (REMOVE_ADMIN_BTN,start_remove_admin),
         (DAILY_PRICE_BTN,start_daily_price),
-        (ADJ_BAL_BTN, start_adjust_balance),
         (DELETE_USER_BTN,start_delete_user),
-        (KASSA_BTN,    start_kassa_panel),
         (CXL_LUNCH_ALL_BTN, cancel_lunch_day),
         (CARD_MANAGE_BTN, start_card_management),
+        (KASSA_BTN,    show_kassa),
         (BACK_BTN,     back_to_menu),
     ]:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(txt)}$"), fn))
@@ -1177,47 +1137,6 @@ def register_handlers(app):
     )
     app.add_handler(price_conv)
 
-    # Balance adjustment conversation handler
-    balance_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(ADJ_BAL_BTN)}$"), start_adjust_balance)],
-        states={
-            S_ADJ_USER: [
-                CallbackQueryHandler(adjust_balance_callback, pattern=r"^adj_user:\d+$"),
-                CallbackQueryHandler(adjust_balance_callback, pattern=r"^back_to_menu$")
-            ],
-            S_ADJ_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_amount)
-            ]
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
-            CommandHandler("cancel", cancel_conversation)
-        ],
-        allow_reentry=True,
-        name="balance_conversation",
-        per_message=True
-    )
-    app.add_handler(balance_conv)
-
-    # Kassa conversation handler
-    kassa_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(KASSA_BTN)}$"), start_kassa_panel)],
-        states={
-            S_KASSA_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_kassa_amount)
-            ]
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
-            CommandHandler("cancel", cancel_conversation),
-            CallbackQueryHandler(kassa_callback, pattern=r"^(kassa_add|kassa_sub|kassa_back)$")
-        ],
-        allow_reentry=True,
-        name="kassa_conversation",
-        per_message=True
-    )
-    app.add_handler(kassa_conv)
-
     # Notify all conversation handler
     notify_conv = ConversationHandler(
         entry_points=[
@@ -1246,4 +1165,12 @@ def register_handlers(app):
     # Add notify response callback handler
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
     logger.info("notify response callback handler registered")
+
+    # Register hourly sync job
+    job_queue = app.job_queue
+    job_queue.run_repeating(
+        hourly_sync_balances,
+        interval=3600,  # 1 hour in seconds
+        first=10  # Start after 10 seconds
+    )
 

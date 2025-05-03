@@ -297,69 +297,74 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle food selection callback"""
     query = update.callback_query
     await query.answer()
     
-    logger.info(f"--- food_selection_cb START --- Data: {query.data}")
+    # Get user
     user = await get_user_async(update.effective_user.id)
-    today = datetime.datetime.now(pytz.timezone("Asia/Tashkent")).strftime("%Y-%m-%d")
-    
-    # Determine test mode and prefix based on user_data set by attendance_cb
-    is_test_callback = context.user_data.get('test_mode', False)
-    prefix = "⚠️ TEST: " if is_test_callback else ""
-    logger.info(f"food_selection_cb: User={user.name}, Today={today}, IsTestCallback={is_test_callback}, Prefix='{prefix}', UserData={context.user_data}")
-
-    # Use base_data for comparisons
-    if query.data.endswith("cancel_attendance"):
-        await query.message.edit_text("❌ Ro'yxatga olish bekor qilindi.")
+    if not user:
+        await query.message.edit_text("❌ Foydalanuvchi topilmadi.")
         return
-
-    if query.data.endswith("cancel_lunch"):
-        if today in user.attendance:
-            await user.remove_attendance(today, is_test=is_test_callback)
-            await query.message.edit_text(
-                f"{prefix}❌ {today} uchun buyurtma bekor qilindi. Balans: {user.balance} so'm."
-            )
-        else:
-            await query.message.edit_text(f"{prefix}❌ Buyurtma bekor qilindi.")
-        return
-    
-    # Handle actual food selection
-    food = query.data.split(":")[1]
-    logger.info(f"food_selection_cb: Food selected: {food}")
-    
-    # Check if already attended
-    logger.info(f"food_selection_cb: Checking attendance for {today}. Current attendance: {user.attendance}")
-    if today in user.attendance:
-        logger.info(f"food_selection_cb: User {user.name} IS marked as attended for {today}.")
-        # Use the is_test_callback determined from user_data at the start
-        logger.info(f"food_selection_cb: Checking IsTestCallback={is_test_callback} before blocking.")
         
-        if not is_test_callback: # Block changes in regular mode if already attended
-            logger.warning(f"food_selection_cb: BLOCKING user {user.name}. IsTestCallback={is_test_callback}.")
-            food_chosen = await user.get_food_choice(today, is_test=is_test_callback)
+    # Check if it's test mode
+    is_test = query.data.startswith("test_")
+    callback_data = query.data.replace("test_", "")
+    
+    # Handle cancel lunch
+    if callback_data == "cancel_lunch":
+        tz = pytz.timezone("Asia/Tashkent")
+        now = datetime.datetime.now(tz)
+        if now.hour >= 10:
             await query.message.edit_text(
-                 f"{prefix}⚠️ Siz bugun allaqachon ro'yxatdasiz ({food_chosen or 'Tanlanmagan'}). Balansingiz: {user.balance} so'm."
+                "❌ Kechirasiz, 10:00 dan keyin bekor qilish imkoni yo'q.",
+                reply_markup=get_user_kb(user)
             )
             return
-        else:
-             # If it's test mode (even if attended), allow change by removing first
-             logger.info(f"food_selection_cb: TEST MODE - Allowing food change for {user.name} on {today}. Removing previous attendance.")
-             await user.remove_attendance(today, is_test=True) # Remove previous test attendance
-             # Prefix is already set correctly
-    else:
-        logger.info(f"food_selection_cb: User {user.name} is NOT marked as attended for {today}. Proceeding to add.")
+            
+        # Remove from attendance
+        if user.attendance:
+            user.attendance.remove(now.strftime('%Y-%m-%d'))
+            user.save()
+            
+        # Remove food choice
+        await remove_food_choice(user.telegram_id, now.strftime('%Y-%m-%d'))
+        
+        await query.message.edit_text(
+            "✅ Ovqatga qatnashish bekor qilindi.",
+            reply_markup=get_user_kb(user)
+        )
+        return
+        
+    # Handle food selection
+    if callback_data.startswith("food:"):
+        food_name = callback_data[5:]  # Remove "food:" prefix
+        
+        # Save food choice
+        await save_food_choice(user.telegram_id, food_name)
+        
+        await query.message.edit_text(
+            f"✅ {food_name} tanlandi!",
+            reply_markup=get_user_kb(user)
+        )
+        return
 
-    # Add attendance with food choice
-    logger.info(f"---> Calling add_attendance for {user.name} on {today} with food: {food}")
-    logger.info(f"---> User attendance BEFORE call: {user.attendance}")
-    await user.add_attendance(today, food, is_test=is_test_callback)
+def get_user_kb(user):
+    """Get user keyboard with dynamic cancel lunch button"""
+    keyboard = [
+        [BAL_BTN],
+        [CARD_BTN]
+    ]
     
-    # Get the food choice after adding attendance
-    food_choice = await user.get_food_choice(today, is_test=is_test_callback)
-    await query.message.edit_text(
-        f"{prefix}✅ {food_choice} tanlandi. Balansingiz: {user.balance} so'm."
-    )
+    # Add cancel lunch button if user is attending today
+    tz = pytz.timezone("Asia/Tashkent")
+    now = datetime.datetime.now(tz)
+    today = now.strftime('%Y-%m-%d')
+    
+    if user.attendance and today in user.attendance and now.hour < 10:
+        keyboard.insert(0, [CXL_BTN])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tz = pytz.timezone("Asia/Tashkent")
@@ -617,27 +622,27 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Test data cleanup complete")
 
 async def check_debts(context: ContextTypes.DEFAULT_TYPE):
-    """Check for users with debt > 50,000 and send notifications."""
+    """Check for users with negative balance and send warm notifications on MWF at 12:00 PM."""
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.datetime.now(tz)
     
-    # Only run on weekdays
-    if now.weekday() >= 5:  # skip weekends
+    # Only run on Monday (0), Wednesday (2), Friday (4)
+    if now.weekday() not in [0, 2, 4]:
         return
         
     users = await get_all_users_async()
     for u in users:
-        if u.balance < -50000:  # Negative balance means debt
+        if u.balance < 0:  # Any negative balance
             try:
                 await context.bot.send_message(
                     chat_id=u.telegram_id,
                     text=(
-                        f"⚠️ Eslatma: qarzingiz {abs(u.balance)} so'm. "
-                        "Iltimos, balansingizni to'ldiring."
+                        f"👋 Assalomu alaykum! Sizning balansingizda {abs(u.balance):,.0f} so'm qarzdorlik mavjud. "
+                        f"Iltimos, balansingizni to'ldiring. Tushunganingiz uchun tashakkur, sog' bo'ling 🙏"
                     )
                 )
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error sending debt notification to user {u.telegram_id}: {str(e)}")
 
 # ─── SYNCHRONOUS admin-check (for your keyboard builder) ────────────────────────
 
@@ -721,13 +726,13 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^cancel_lunch$"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^cancel_attendance$"))
 
-    # Add debt check job (runs every 2 days at 12:00 PM Tashkent time)
+    # Add debt check job (runs every Monday, Wednesday, Friday at 12:00 PM Tashkent time)
     tz = pytz.timezone("Asia/Tashkent")
     first_time = datetime.time(hour=12, minute=0, tzinfo=tz)
-    app.job_queue.run_repeating(
+    app.job_queue.run_daily(
         check_debts,
-        interval=datetime.timedelta(days=2),
-        first=first_time,
+        time=first_time,
+        days=(0, 2, 4),  # Monday, Wednesday, Friday
         name="debt_check"
     )
 
