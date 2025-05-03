@@ -2,7 +2,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # Google Sheets setup
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
 SHEET_NAME = 'tushlik'
 WORKSHEET_NAME = 'Sheet1'
 CREDENTIALS_FILE = 'credentials.json'
