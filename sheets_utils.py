@@ -1,12 +1,5 @@
 import os
-
-# Ensure credentials.json exists from env variable before any Google API usage
-if not os.path.exists("credentials.json"):
-    creds = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if creds:
-        with open("credentials.json", "w") as f:
-            f.write(creds)
-
+import json
 import gspread
 import logging
 from google.oauth2.service_account import Credentials
@@ -23,7 +16,13 @@ SCOPES = [
 ]
 SHEET_NAME = 'tushlik'
 WORKSHEET_NAME = 'Sheet1'
-CREDENTIALS_FILE = 'credentials.json'
+
+def get_creds():
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if not creds_json:
+        raise RuntimeError("GOOGLE_CREDENTIALS_JSON environment variable not set!")
+    creds_dict = json.loads(creds_json)
+    return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
 def to_async(func):
     @wraps(func)
@@ -37,7 +36,7 @@ def to_async(func):
 def get_worksheet():
     """Get the worksheet object. Now async-compatible."""
     try:
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+        creds = get_creds()
         gc = gspread.authorize(creds)
         sh = gc.open(SHEET_NAME)
         worksheet = sh.worksheet(WORKSHEET_NAME)
@@ -46,11 +45,12 @@ def get_worksheet():
         logger.error(f"Error getting worksheet: {str(e)}")
         return None
 
-@to_async
-def fetch_all_rows():
+async def fetch_all_rows():
     """Fetch all rows from the worksheet. Now async-compatible."""
+    worksheet = await get_worksheet()
+    if not worksheet:
+        return []
     try:
-        worksheet = get_worksheet()
         return worksheet.get_all_records()
     except Exception as e:
         logger.error(f"Error fetching rows: {str(e)}")
@@ -123,7 +123,6 @@ async def sync_balances_from_sheet(context=None) -> dict:
             except Exception as e:
                 errors += 1
                 logger.error(f"Error updating user from sheet: {str(e)}")
-
         return {
             "success": True,
             "updated": updated,
@@ -131,4 +130,4 @@ async def sync_balances_from_sheet(context=None) -> dict:
         }
     except Exception as e:
         logger.error(f"Error syncing from sheet: {str(e)}")
-        return {"success": False, "error": str(e)} 
+        return {"success": False, "error": str(e)}
