@@ -33,29 +33,19 @@ from utils import (
     get_all_users_async,  # needed for scheduled jobs
 )
 from config import DEFAULT_DAILY_PRICE
+from sheets_utils import get_worksheet
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-# Define the menu items based on day of week
-def get_menu_items():
+async def get_menu_items_from_db():
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.datetime.now(tz)
     weekday = now.weekday()
-    
-    # Monday (0), Wednesday (2), Friday (4)
-    if weekday in [0, 2, 4]:
-        return [
-            "Qovurma Lag'mon", "Jarkob", "Sokoro", "Do'lma",
-            "Osh", "Qovurma Makron", "Xonim", "Bifshteks",
-            "Lo'li kabob"
-        ]
-    # Tuesday (1), Thursday (3)
-    else:
-        return [
-            "Teftel sho'rva", "Mastava", "Chuchvara",
-            "Sho'rva", "Suyuq Lag'mon"
-        ]
+    menu_name = "menu1" if weekday in [0, 2, 4] else "menu2"
+    menu_col = await get_collection("menu")
+    menu_doc = await menu_col.find_one({"name": menu_name})
+    return menu_doc["items"] if menu_doc and "items" in menu_doc else []
 
 # ─── BUTTON LABELS ─────────────────────────────────────────────────────────────
 
@@ -171,12 +161,36 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = await get_user_async(update.effective_user.id)
+    tg_id = update.effective_user.id
+    user = await get_user_async(tg_id)
     if not user:
         return await update.message.reply_text(
             "Iltimos, avval /start bilan ro'yxatdan o'ting."
         )
-    await update.message.reply_text(f"Balansingiz: {user.balance} so'm.")
+
+    worksheet = await get_worksheet()
+    if not worksheet:
+        return await update.message.reply_text("Google Sheets bilan bog'lanishda xatolik yuz berdi.")
+
+    # Find the row with this user's telegram_id
+    all_values = worksheet.get_all_values()
+    balance_from_sheet = None
+    for row in all_values[1:]:  # Skip header
+        if str(row[1]) == str(tg_id):
+            try:
+                balance_from_sheet = float(str(row[2]).replace(',', ''))
+            except Exception:
+                balance_from_sheet = None
+            break
+
+    if balance_from_sheet is not None and balance_from_sheet != user.balance:
+        await users_col.update_one(
+            {"telegram_id": tg_id},
+            {"$set": {"balance": balance_from_sheet}}
+        )
+        user.balance = balance_from_sheet
+
+    await update.message.reply_text(f"Balansingiz: {user.balance:,.0f} so'm.")
 
 async def attendance_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
@@ -200,16 +214,13 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(
             "Iltimos, avval /start bilan ro'yxatdan o'ting."
         )
-    
-    # Get menu items based on day of week
-    menu_items = get_menu_items()
-    
+    # Get menu items from DB
+    menu_items = await get_menu_items_from_db()
     # Create keyboard with menu items
     keyboard = []
     for item in menu_items:
         keyboard.append([InlineKeyboardButton(item, callback_data=item)])
     keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
-    
     await update.message.reply_text(
         "Bugungi taomlar:",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -235,34 +246,22 @@ async def menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
-    # Get user and check if they exist
     user = await get_user_async(update.effective_user.id)
     if not user:
         await query.message.edit_text("❌ Siz ro'yxatdan o'tmagansiz. /start buyrug'ini yuboring.")
         return
-
-    # Get current time in Tashkent
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
-
-    # Parse callback data
     is_test = query.data.startswith("test_")
     YES = "att_yes" if not is_test else "test_att_yes"
     NO = "att_no" if not is_test else "test_att_no"
-
-    # Check for NO response
     if query.data.endswith(NO):
-        # Remove any existing attendance or food choice
         if today in user.attendance:
             await user.remove_attendance(today, is_test=is_test)
-        # Record the decline
         await user.decline_attendance(today)
         await query.message.edit_text("❌ Bugungi tushlik rad etildi.")
         return
-
-    # Check for YES response
     if query.data.endswith(YES):
         if today in user.attendance and not is_test:
             logger.warning(f"attendance_cb: Blocking regular user {user.name} who already attended today.")
@@ -270,25 +269,17 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ Siz bugun allaqachon ro'yxatdasiz. Balansingiz: {user.balance} so'm."
             )
             return
-
         if is_test and today in user.attendance:
             logger.info(f"attendance_cb: TEST MODE - User {user.name} attended today ({today}), removing previous record.")
             await user.remove_attendance(today)
             logger.info(f"attendance_cb: TEST MODE - Previous attendance removed for {user.name}.")
         elif is_test:
             logger.info(f"attendance_cb: TEST MODE - User {user.name} did NOT attend today, proceeding.")
-
-        # Remove any decline record if it exists
         if today in user.declined_days:
             await user.remove_decline(today)
-
-        # Get menu items based on day of week
-        menu_items = get_menu_items()
-        
-        # Create keyboard with food options
+        # Get menu items from DB
+        menu_items = await get_menu_items_from_db()
         keyboard = [[InlineKeyboardButton(item, callback_data=f"food:{item}")] for item in menu_items]
-        if now.hour < 10:
-            keyboard.append([InlineKeyboardButton("❌ Tushlikni bekor qilish", callback_data="cancel_lunch")])
         keyboard.append([InlineKeyboardButton("🔙 Ortga", callback_data="cancel_attendance")])
         prefix = "⚠️ TEST: " if is_test else ""
         await query.message.edit_text(

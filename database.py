@@ -22,10 +22,11 @@ kassa_col = None
 daily_food_choices_col = None
 test_food_choices_col = None  # New collection for test data
 card_details_col = None  # New collection for card details
+menu_col = None  # Add menu_col to globals
 
 async def get_collection(collection_name: str):
     """Get a collection, initializing the database if needed"""
-    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col, card_details_col
+    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col, card_details_col, menu_col
     
     if _client is None:
         await init_db()
@@ -40,12 +41,14 @@ async def get_collection(collection_name: str):
         return test_food_choices_col
     elif collection_name == "card_details":
         return card_details_col
+    elif collection_name == "menu":
+        return menu_col
     else:
         raise ValueError(f"Unknown collection: {collection_name}")
 
 async def init_db():
     """Initialize database connection and indexes"""
-    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col, card_details_col
+    global _client, db, users_col, kassa_col, daily_food_choices_col, test_food_choices_col, card_details_col, menu_col
     
     try:
         # Initialize client and collections
@@ -56,6 +59,7 @@ async def init_db():
         daily_food_choices_col = db["daily_food_choices"]
         test_food_choices_col = db["test_food_choices"]  # Initialize test collection
         card_details_col = db["card_details"]  # Initialize card details collection
+        menu_col = db["menu"]  # Initialize menu collection
         
         # Create indexes
         await users_col.create_index("telegram_id", unique=True)
@@ -65,6 +69,7 @@ async def init_db():
         await kassa_col.create_index("date", unique=True)
         await daily_food_choices_col.create_index([("date", 1), ("telegram_id", 1)], unique=True)
         await test_food_choices_col.create_index([("date", 1), ("telegram_id", 1)], unique=True)  # Test collection index
+        await menu_col.create_index("name", unique=True)  # Menu collection index
         
         # Insert default kassa record if not exists
         tz = pytz.timezone("Asia/Tashkent")
@@ -102,6 +107,32 @@ async def init_db():
         card_details = await get_collection("card_details")
         await card_details.create_index("card_number", unique=True)
         
+        # Menu collection
+        menu = await get_collection("menu")
+        await menu.create_index("name", unique=True)
+
+        # Ensure menu1 and menu2 documents exist
+        if not await menu.find_one({"name": "menu1"}):
+            await menu.insert_one({"name": "menu1", "items": []})
+        if not await menu.find_one({"name": "menu2"}):
+            await menu.insert_one({"name": "menu2", "items": []})
+
+        # Add actual foods to menu1 and menu2 if empty
+        menu1_foods = [
+            "Qovurma Lag'mon", "Jarkob", "Sokoro", "Do'lma",
+            "Osh", "Qovurma Makron", "Xonim", "Bifshteks", "Lo'li kabob"
+        ]
+        menu2_foods = [
+            "Teftel sho'rva", "Mastava", "Chuchvara",
+            "Sho'rva", "Suyuq Lag'mon"
+        ]
+        menu1_doc = await menu.find_one({"name": "menu1"})
+        if menu1_doc and not menu1_doc.get("items"):
+            await menu.update_one({"name": "menu1"}, {"$set": {"items": menu1_foods}})
+        menu2_doc = await menu.find_one({"name": "menu2"})
+        if menu2_doc and not menu2_doc.get("items"):
+            await menu.update_one({"name": "menu2"}, {"$set": {"items": menu2_foods}})
+
         print("Database initialized successfully")
     except Exception as e:
         print(f"Database initialization error: {e}")
