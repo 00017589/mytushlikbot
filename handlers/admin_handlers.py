@@ -1203,3 +1203,44 @@ async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT
     await query.message.edit_text(
         f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
     )
+
+async def sync_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to sync user balances from Google Sheets."""
+    logger = logging.getLogger(__name__)
+    logger.info("/sync_balances command triggered")
+    try:
+        user_id = update.effective_user.id
+        caller = await get_user_async(user_id)
+        logger.info(f"User {user_id} called /sync_balances. Admin: {caller.is_admin if caller else 'N/A'}")
+        if not caller or not caller.is_admin:
+            await update.message.reply_text("❌ Siz admin emassiz.")
+            return
+
+        await update.message.reply_text("⏳ Google Sheets'dan balanslar yuklanmoqda...")
+        rows = fetch_all_rows()
+        logger.info(f"Fetched {len(rows)} rows from Google Sheets.")
+        updated = 0
+        not_found = []
+        for row in rows:
+            telegram_id = row.get('telegram_id')
+            balance = row.get('balance')
+            logger.info(f"Processing row: telegram_id={telegram_id}, balance={balance}")
+            if not telegram_id or balance is None:
+                continue
+            try:
+                user = await get_user_async(int(telegram_id))
+                if user:
+                    user.balance = float(str(balance).replace(',', ''))
+                    await user.save()
+                    updated += 1
+                else:
+                    not_found.append(str(telegram_id))
+            except Exception as e:
+                logger.error(f"Error updating user {telegram_id}: {e}")
+        msg = f"✅ {updated} ta foydalanuvchi balansi yangilandi."
+        if not_found:
+            msg += f"\n❗ Topilmadi: {', '.join(not_found)}"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"/sync_balances error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Xatolik: {e}")
