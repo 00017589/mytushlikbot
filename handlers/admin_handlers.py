@@ -24,7 +24,7 @@ from telegram.ext import (
 )
 from pymongo import ReadPreference
 from database import users_col, get_collection
-
+from sheets_utils import fetch_all_rows
 from models.user_model import User
 from utils import (
     validate_name,
@@ -1011,6 +1011,81 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user responses to notifications"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse the callback data
+    _, response, user_id = query.data.split(':')
+    user_id = int(user_id)
+    
+    # Get the user who responded
+    user = await get_user_async(user_id)
+    if not user:
+        return
+    
+    # Get the notification responses from context
+    if 'notify_responses' not in context.user_data:
+        return
+    
+    responses = context.user_data['notify_responses']
+    user_info = f"{user.name} ({user.telegram_id})"
+    
+    # Update the response tracking
+    if response == 'yes':
+        if user_info not in responses['yes']:
+            responses['yes'].append(user_info)
+    else:  # response == 'no'
+        if user_info not in responses['no']:
+            responses['no'].append(user_info)
+    
+    # Edit the message to remove the buttons
+    await query.message.edit_text(
+        f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
+    )
+
+async def sync_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to sync user balances from Google Sheets."""
+    logger = logging.getLogger(__name__)
+    logger.info("/sync_balances command triggered")
+    try:
+        user_id = update.effective_user.id
+        caller = await get_user_async(user_id)
+        logger.info(f"User {user_id} called /sync_balances. Admin: {caller.is_admin if caller else 'N/A'}")
+        if not caller or not caller.is_admin:
+            await update.message.reply_text("❌ Siz admin emassiz.")
+            return
+
+        await update.message.reply_text("⏳ Google Sheets'dan balanslar yuklanmoqda...")
+        rows = fetch_all_rows()
+        logger.info(f"Fetched {len(rows)} rows from Google Sheets.")
+        updated = 0
+        not_found = []
+        for row in rows:
+            telegram_id = row.get('telegram_id')
+            balance = row.get('balance')
+            logger.info(f"Processing row: telegram_id={telegram_id}, balance={balance}")
+            if not telegram_id or balance is None:
+                continue
+            try:
+                user = await get_user_async(int(telegram_id))
+                if user:
+                    user.balance = float(str(balance).replace(',', ''))
+                    await user.save()
+                    updated += 1
+                else:
+                    not_found.append(str(telegram_id))
+            except Exception as e:
+                logger.error(f"Error updating user {telegram_id}: {e}")
+        msg = f"✅ {updated} ta foydalanuvchi balansi yangilandi."
+        if not_found:
+            msg += f"\n❗ Topilmadi: {', '.join(not_found)}"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"/sync_balances error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Xatolik: {e}")
+
 # ─── 10) REGISTER ALL HANDLERS ─────────────────────────────────────────────────
 def register_handlers(app):
     # Initialize collections
@@ -1022,6 +1097,8 @@ def register_handlers(app):
     # Add notify_all command handler explicitly
     app.add_handler(CommandHandler("notify_all", notify_all))
     logger.info("notify_all command handler registered")
+
+    app.add_handler(CommandHandler("sync_balances", sync_balances))
 
     # (2) single‐step buttons
     for txt, fn in [
@@ -1170,77 +1247,3 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
     logger.info("notify response callback handler registered")
 
-async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user responses to notifications"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Parse the callback data
-    _, response, user_id = query.data.split(':')
-    user_id = int(user_id)
-    
-    # Get the user who responded
-    user = await get_user_async(user_id)
-    if not user:
-        return
-    
-    # Get the notification responses from context
-    if 'notify_responses' not in context.user_data:
-        return
-    
-    responses = context.user_data['notify_responses']
-    user_info = f"{user.name} ({user.telegram_id})"
-    
-    # Update the response tracking
-    if response == 'yes':
-        if user_info not in responses['yes']:
-            responses['yes'].append(user_info)
-    else:  # response == 'no'
-        if user_info not in responses['no']:
-            responses['no'].append(user_info)
-    
-    # Edit the message to remove the buttons
-    await query.message.edit_text(
-        f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
-    )
-
-async def sync_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to sync user balances from Google Sheets."""
-    logger = logging.getLogger(__name__)
-    logger.info("/sync_balances command triggered")
-    try:
-        user_id = update.effective_user.id
-        caller = await get_user_async(user_id)
-        logger.info(f"User {user_id} called /sync_balances. Admin: {caller.is_admin if caller else 'N/A'}")
-        if not caller or not caller.is_admin:
-            await update.message.reply_text("❌ Siz admin emassiz.")
-            return
-
-        await update.message.reply_text("⏳ Google Sheets'dan balanslar yuklanmoqda...")
-        rows = fetch_all_rows()
-        logger.info(f"Fetched {len(rows)} rows from Google Sheets.")
-        updated = 0
-        not_found = []
-        for row in rows:
-            telegram_id = row.get('telegram_id')
-            balance = row.get('balance')
-            logger.info(f"Processing row: telegram_id={telegram_id}, balance={balance}")
-            if not telegram_id or balance is None:
-                continue
-            try:
-                user = await get_user_async(int(telegram_id))
-                if user:
-                    user.balance = float(str(balance).replace(',', ''))
-                    await user.save()
-                    updated += 1
-                else:
-                    not_found.append(str(telegram_id))
-            except Exception as e:
-                logger.error(f"Error updating user {telegram_id}: {e}")
-        msg = f"✅ {updated} ta foydalanuvchi balansi yangilandi."
-        if not_found:
-            msg += f"\n❗ Topilmadi: {', '.join(not_found)}"
-        await update.message.reply_text(msg)
-    except Exception as e:
-        logger.error(f"/sync_balances error: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Xatolik: {e}")
