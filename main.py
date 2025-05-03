@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-import os
-if not os.path.exists("credentials.json"):
-    creds = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if creds:
-        with open("credentials.json", "w") as f:
-            f.write(creds)
-            
 import logging
+import os
 import datetime
 import pytz
 import asyncio
 import sys
 import atexit
 import tempfile
+
 # Cross-platform imports for file locking
 if os.name == 'nt':
     import msvcrt
@@ -32,7 +27,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(name)
 
 async def error_handler(update, context):
     """Log Errors caused by Updates."""
@@ -137,7 +132,6 @@ def main():
         # 6) Schedule daily jobs
         jq = application.job_queue
         tz = pytz.timezone("Asia/Tashkent")
-
         # Morning survey at 7:00 Mon–Fri
         jq.run_daily(
             callback=uh.morning_prompt,
