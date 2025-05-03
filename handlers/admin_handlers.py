@@ -1499,8 +1499,18 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await del_menu(update, context, "menu1")
         elif data == "del_menu2":
             await del_menu(update, context, "menu2")
-        elif data == "menu_panel" or data == "menu_back":
+        elif data == "menu_panel":
             await menu_panel(update, context)
+        elif data == "menu_back":
+            # Delete the inline menu message if possible, or redraw the admin panel
+            try:
+                await query.message.delete()
+            except Exception:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="Admin panel:",
+                    reply_markup=get_admin_kb()
+                )
         elif data.startswith("del_menu1:") or data.startswith("del_menu2:"):
             await handle_menu_del(update, context)
         else:
