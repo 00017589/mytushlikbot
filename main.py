@@ -8,6 +8,11 @@ import sys
 import atexit
 import tempfile
 
+if not os.path.exists("credentials.json"):
+    creds = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if creds:
+        with open("credentials.json", "w") as f:
+            f.write(creds)
 # Cross-platform imports for file locking
 if os.name == 'nt':
     import msvcrt
