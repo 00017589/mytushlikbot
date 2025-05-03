@@ -24,7 +24,13 @@ from telegram.ext import (
 )
 from pymongo import ReadPreference
 from database import users_col, get_collection
-from sheets_utils import fetch_all_rows
+from sheets_utils import (
+    fetch_all_rows,
+    get_worksheet,
+    update_user_balance_in_sheet,
+    sync_balances_from_sheet
+)
+from utils.food_utils import get_food_choices_for_date
 from models.user_model import User
 from utils import (
     validate_name,
@@ -35,13 +41,22 @@ from utils import (
     is_admin,
 )
 from config import DEFAULT_DAILY_PRICE
+from telegram.error import BadRequest
 
 # Initialize collections
 kassa_col = None
+menu_col = None
 
 async def init_collections():
-    global kassa_col
+    global kassa_col, menu_col
     kassa_col = await get_collection("kassa")
+    menu_col = await get_collection("menu")
+    
+    # Initialize menu collections if they don't exist
+    if not await menu_col.find_one({"name": "menu1"}):
+        await menu_col.insert_one({"name": "menu1", "items": []})
+    if not await menu_col.find_one({"name": "menu2"}):
+        await menu_col.insert_one({"name": "menu2", "items": []})
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -84,6 +99,16 @@ KASSA_SUB_BTN = "Kassa ayrish"
     S_CARD_OWNER      # entering new card owner name
 ) = range(13)
 
+# Uzbek, short, button-based menu management for admins
+MENU_BTN = "🍽 Menyu"
+VIEW_MENU1_BTN = "1-Menuni ko'rish"
+VIEW_MENU2_BTN = "2-Menuni ko'rish"
+ADD_MENU1_BTN = "1-Menuga qo'shish"
+ADD_MENU2_BTN = "2-Menuga qo'shish"
+DEL_MENU1_BTN = "1-Menudan o'chirish"
+DEL_MENU2_BTN = "2-Menudan o'chirish"
+ORTGA_BTN = "Ortga"
+
 # ─── KEYBOARDS ─────────────────────────────────────────────────────────────────
 def get_admin_kb():
     return ReplyKeyboardMarkup([
@@ -93,6 +118,7 @@ def get_admin_kb():
         [DELETE_USER_BTN, CXL_LUNCH_ALL_BTN],
         [CARD_MANAGE_BTN],
         [KASSA_BTN],
+        [MENU_BTN],
         [BACK_BTN],
     ], resize_keyboard=True)
 
@@ -103,7 +129,16 @@ def get_kassa_kb():
         [BACK_BTN],
     ], resize_keyboard=True)
 
-# ─── 1) /admin ENTRY & FIRST‐TIME SETUP ────────────────────────────────────────
+# Menyu panel
+def get_menu_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(VIEW_MENU1_BTN, callback_data="view_menu1"), InlineKeyboardButton(VIEW_MENU2_BTN, callback_data="view_menu2")],
+        [InlineKeyboardButton(ADD_MENU1_BTN, callback_data="add_menu1"), InlineKeyboardButton(ADD_MENU2_BTN, callback_data="add_menu2")],
+        [InlineKeyboardButton(DEL_MENU1_BTN, callback_data="del_menu1"), InlineKeyboardButton(DEL_MENU2_BTN, callback_data="del_menu2")],
+        [InlineKeyboardButton(ORTGA_BTN, callback_data="menu_back")],
+    ])
+
+# ─── 1) /admin ENTRY & FIRST-TIME SETUP ────────────────────────────────────────
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     
@@ -189,13 +224,95 @@ def format_users_list(users: list[User]) -> str:
     return "\n\n".join(lines)
 
 async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = await get_all_users_async()
-    await update.message.reply_text(
-        format_users_list(users),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=get_admin_kb()
-    )
+    """Show user list immediately and sync balances in background"""
+    try:
+        # First show the current list immediately
+        users = await get_all_users_async()
+        await update.message.reply_text(
+            format_users_list(users),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        # Then start syncing in background
+        loading_msg = await update.message.reply_text("⏳ Balanslar yangilanmoqda...")
+        try:
+            updated = await sync_all_user_balances_from_sheet()
+            if updated > 0:
+                # Only show updated list if there were changes
+                users = await get_all_users_async()
+                await loading_msg.edit_text(
+                    format_users_list(users),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await loading_msg.delete()
+        except Exception as e:
+            logger.error(f"Error syncing balances: {e}")
+            await loading_msg.edit_text("❌ Balanslarni yangilashda xatolik yuz berdi.")
+
+        # Show the admin keyboard
+        await update.message.reply_text(
+            "Admin panel:",
+            reply_markup=get_admin_kb()
+        )
+    except Exception as e:
+        logger.error(f"Error in list_users_exec: {e}")
+        await update.message.reply_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_admin_kb()
+        )
     return ConversationHandler.END
+
+async def sync_all_user_balances_from_sheet():
+    """Sync all user balances from Google Sheets to the database. Returns the number of updated users."""
+    try:
+        worksheet = await get_worksheet()
+        if not worksheet:
+            logger.error("sync_all_user_balances_from_sheet: Could not get worksheet.")
+            return 0
+
+        # Get all values at once instead of cell by cell
+        all_values = worksheet.get_all_values()
+        if len(all_values) <= 1:  # Only header or empty
+            return 0
+
+        # Prepare bulk update operations
+        bulk_ops = []
+        updated = 0
+        
+        # Skip header row
+        for row in all_values[1:]:
+            try:
+                if len(row) < 2 or not row[1].strip().isdigit():
+                    continue
+                    
+                tg_id = int(row[1])
+                try:
+                    balance = float(str(row[2]).replace(',', ''))
+                except (ValueError, TypeError):
+                    continue
+
+                bulk_ops.append(
+                    UpdateOne(
+                        {"telegram_id": tg_id},
+                        {"$set": {"balance": balance}},
+                        upsert=False
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Error processing row {row}: {e}")
+                continue
+
+        if bulk_ops:
+            # Execute bulk update
+            result = await users_col.bulk_write(bulk_ops, ordered=False)
+            updated = result.modified_count
+
+        logger.info(f"sync_all_user_balances_from_sheet: Updated {updated} users.")
+        return updated
+    except Exception as e:
+        logger.error(f"sync_all_user_balances_from_sheet: Fatal error: {e}")
+        return 0
 
 # ─── 4) ADMIN PROMOTION / DEMOTION ─────────────────────────────────────────────
 async def start_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -286,90 +403,220 @@ async def remove_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ─── 5) SET PRICE ───────────────────────────────────────────────────────────────
 async def start_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = await users_col.find().to_list(length=None)
-    keyboard = []
-    for user in users:
-        keyboard.append([InlineKeyboardButton(
-            f"{user['name']} ({user.get('daily_price', 0):,} so'm)",
-            callback_data=f"set_price:{user['telegram_id']}"
-        )])
-    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
-    
-    await update.message.reply_text(
-        "Kunlik narxini o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    """Start the daily price change flow"""
+    logger.info("start_daily_price: Starting price change flow")
+    try:
+        users = await users_col.find().to_list(length=None)
+        logger.info(f"start_daily_price: Found {len(users)} users")
+        
+        keyboard = []
+        for user in users:
+            keyboard.append([InlineKeyboardButton(
+                f"{user['name']} ({user.get('daily_price', 0):,} so'm)",
+                callback_data=f"set_price:{user['telegram_id']}"
+            )])
+        keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
+        
+        message_text = "Kunlik narxini o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:"
+        
+        if update.callback_query:
+            logger.info("start_daily_price: Handling callback query")
+            await update.callback_query.message.edit_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            logger.info("start_daily_price: Handling message")
+            await update.message.reply_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except Exception as e:
+        logger.error(f"start_daily_price: Error occurred: {str(e)}", exc_info=True)
+        raise
 
 async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "back_to_menu":
-        await query.message.delete()
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Admin panel:",
-            reply_markup=get_admin_kb()
-        )
-        return ConversationHandler.END
-    
-    if query.data == "back_to_price_list":
-        await start_daily_price(update, context)
-        return
-    
-    if query.data.startswith("set_price:"):
-        user_id = int(query.data.split(":")[1])
-        user = await users_col.find_one({"telegram_id": user_id})
-        keyboard = [[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]]
-        await query.message.edit_text(
-            f"{user['name']} uchun yangi kunlik narxni kiriting:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        context.user_data["pending_price_user"] = user_id
-        return S_SET_PRICE
+    """Handle price change callbacks"""
+    logger.info("daily_price_callback: Received callback")
+    try:
+        query = update.callback_query
+        await query.answer()
+        logger.info(f"daily_price_callback: Callback data: {query.data}")
+        
+        if query.data == "back_to_menu":
+            logger.info("daily_price_callback: Handling back to menu")
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Admin panel:",
+                reply_markup=get_admin_kb()
+            )
+            return
+        
+        if query.data == "back_to_price_list":
+            logger.info("daily_price_callback: Handling back to price list")
+            await start_daily_price(update, context)
+            return
+        
+        if query.data.startswith("set_price:"):
+            logger.info("daily_price_callback: Handling set price selection")
+            user_id = int(query.data.split(":")[1])
+            logger.info(f"daily_price_callback: Selected user_id: {user_id}")
+            
+            user = await users_col.find_one({"telegram_id": user_id})
+            if not user:
+                logger.warning(f"daily_price_callback: User not found for id {user_id}")
+                await query.message.edit_text(
+                    "❌ Foydalanuvchi topilmadi.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]])
+                )
+                return
+            
+            # Store user_id in context for later use
+            context.user_data["pending_price_user"] = user_id
+            
+            # Create a unique callback data for price input
+            callback_data = f"confirm_price:{user_id}"
+            
+            keyboard = [
+                [InlineKeyboardButton("25000", callback_data=f"{callback_data}:25000")],
+                [InlineKeyboardButton("30000", callback_data=f"{callback_data}:30000")],
+                [InlineKeyboardButton("35000", callback_data=f"{callback_data}:35000")],
+                [InlineKeyboardButton("40000", callback_data=f"{callback_data}:40000")],
+                [InlineKeyboardButton("Boshqa narx", callback_data=f"custom_price:{user_id}")],
+                [InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]
+            ]
+            
+            await query.message.edit_text(
+                f"{user['name']} uchun yangi kunlik narxni tanlang:\n"
+                f"Joriy narx: {user.get('daily_price', 0):,} so'm",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+        
+        if query.data.startswith("confirm_price:"):
+            logger.info("daily_price_callback: Handling price confirmation")
+            _, user_id, price = query.data.split(":")
+            user_id = int(user_id)
+            price = float(price)
+            
+            user = await users_col.find_one({"telegram_id": user_id})
+            if not user:
+                logger.warning(f"daily_price_callback: User not found for id {user_id}")
+                await query.message.edit_text(
+                    "❌ Foydalanuvchi topilmadi.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]])
+                )
+                return
+            
+            # Update user's daily price
+            result = await users_col.update_one(
+                {"telegram_id": user_id},
+                {"$set": {"daily_price": price}}
+            )
+            
+            if result.modified_count > 0:
+                await query.message.edit_text(
+                    f"✅ {user['name']} uchun kunlik narx {price:,.2f} so'mga o'zgartirildi!",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]])
+                )
+            else:
+                await query.message.edit_text(
+                    "❌ O'zgarishlar kiritilmadi.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]])
+                )
+            return
+        
+        if query.data.startswith("custom_price:"):
+            logger.info("daily_price_callback: Handling custom price input")
+            user_id = int(query.data.split(":")[1])
+            user = await users_col.find_one({"telegram_id": user_id})
+            if not user:
+                logger.warning(f"daily_price_callback: User not found for id {user_id}")
+                await query.message.edit_text(
+                    "❌ Foydalanuvchi topilmadi.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]])
+                )
+                return
+            # Store user_id in context for later use
+            context.user_data["pending_price_user"] = user_id
+            keyboard = [[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]]
+            await query.message.edit_text(
+                f"{user['name']} uchun yangi kunlik narxni kiriting:\n"
+                f"Joriy narx: {user.get('daily_price', 0):,} so'm",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+    except Exception as e:
+        logger.error(f"daily_price_callback: Error occurred: {str(e)}", exc_info=True)
+        raise
 
 async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the daily price input"""
+    logger.info("handle_daily_price: Received price input")
     try:
-        price = int(update.message.text)
-        if price < 0:
-            raise ValueError
-        
         user_id = context.user_data.get("pending_price_user")
         if not user_id:
+            logger.warning("handle_daily_price: No pending user found")
             await update.message.reply_text(
                 "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
                 reply_markup=get_admin_kb()
             )
-            return ConversationHandler.END
-        
+            return
+        # Remove any spaces and commas from the input
+        price_text = update.message.text.replace(" ", "").replace(",", "")
+        logger.info(f"handle_daily_price: Cleaned price text: {price_text}")
+        try:
+            price = float(price_text)
+            price = round(price, 2)
+            logger.info(f"handle_daily_price: Parsed price: {price}")
+        except ValueError:
+            logger.warning(f"handle_daily_price: Invalid price format: {price_text}")
+            await update.message.reply_text(
+                "❌ Iltimos, to'g'ri raqam kiriting! (Masalan: 25000 yoki 25000.50)",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]])
+            )
+            return
+        if price < 0:
+            logger.warning(f"handle_daily_price: Negative price: {price}")
+            await update.message.reply_text(
+                "❌ Narx manfiy bo'lishi mumkin emas!",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]])
+            )
+            return
+        user = await users_col.find_one({"telegram_id": user_id})
+        if not user:
+            logger.warning(f"handle_daily_price: User not found for id {user_id}")
+            await update.message.reply_text(
+                "❌ Foydalanuvchi topilmadi.",
+                reply_markup=get_admin_kb()
+            )
+            return
         # Update user's daily price
-        await users_col.update_one(
+        result = await users_col.update_one(
             {"telegram_id": user_id},
             {"$set": {"daily_price": price}}
         )
-        
-        # Get updated user info
-        user = await users_col.find_one({"telegram_id": user_id})
-        
-        # Send confirmation and return to admin panel
-        await update.message.reply_text(
-            f"✅ {user['name']} uchun kunlik narx {price:,} so'mga o'zgartirildi!",
-            reply_markup=get_admin_kb()
-        )
-        
+        if result.modified_count > 0:
+            await update.message.reply_text(
+                f"✅ {user['name']} uchun kunlik narx {price:,.2f} so'mga o'zgartirildi!",
+                reply_markup=get_admin_kb()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ O'zgarishlar kiritilmadi.",
+                reply_markup=get_admin_kb()
+            )
         # Clear the stored data
         if "pending_price_user" in context.user_data:
             del context.user_data["pending_price_user"]
-        
-        return ConversationHandler.END
-        
-    except ValueError:
+            logger.info("handle_daily_price: Cleared pending_price_user from context")
+    except Exception as e:
+        logger.error(f"handle_daily_price: Unexpected error: {str(e)}", exc_info=True)
         await update.message.reply_text(
-            "❌ Iltimos, to'g'ri raqam kiriting!",
-            reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_admin_kb()
         )
-        return S_SET_PRICE
 
 # ─── 6) DELETE USER ─────────────────────────────────────────────────────────────
 async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -654,70 +901,6 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
     
     return ConversationHandler.END
 
-async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
-    """Send final summary at 10:00 AM"""
-    job = context.job
-    chat_id = job.data['chat_id']
-    message_id = job.data['message_id']
-    
-    if 'notify_responses' in context.user_data:
-        responses = context.user_data['notify_responses']
-        total_sent = responses['total_sent']
-        yes_count = len(responses['yes'])
-        no_count = len(responses['no'])
-        pending = total_sent - yes_count - no_count
-        
-        summary = (
-            f"📊 Xabar yuborish yakuniy natijalari:\n\n"
-            f"👥 Jami: {total_sent} kishi\n\n"
-            f"📝 Ro'yxat:\n"
-        )
-        
-        # Add yes responses
-        for i, user in enumerate(responses['yes'], 1):
-            summary += f"{i}. {user}\n"
-        
-        # Add food choices if available
-        if responses['food_choices']:
-            summary += f"\n🍽 Taomlar statistikasi:\n"
-            for food, users in responses['food_choices'].items():
-                summary += f"{len(users)}. {food} — {len(users)} ta\n"
-        
-        # Add no responses
-        if responses['no']:
-            summary += f"\n❌ Rad etganlar:\n"
-            for i, user in enumerate(responses['no'], 1):
-                summary += f"{i}. {user}\n"
-        
-        # Add pending responses
-        if pending > 0:
-            summary += f"\n⏳ Javob bermaganlar:\n"
-            all_users = set(f"{u['name']} ({u['telegram_id']})" for u in await get_all_users_async())
-            responded = set(responses['yes'] + responses['no'])
-            pending_users = all_users - responded
-            for i, user in enumerate(pending_users, 1):
-                summary += f"{i}. {user}\n"
-        
-        # Add failed deliveries
-        if responses['failed']:
-            summary += f"\n❌ Yuborilmadi:\n"
-            for i, user in enumerate(responses['failed'], 1):
-                summary += f"{i}. {user}\n"
-        
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=summary
-            )
-        except Exception as e:
-            print(f"Error sending final summary: {e}")
-        
-        # Clear the stored data
-        if 'notify_responses' in context.user_data:
-            del context.user_data['notify_responses']
-        if 'notify_message_id' in context.user_data:
-            del context.user_data['notify_message_id']
-
 # ─── CONVERSATION HANDLERS ──────────────────────────────────────────────────────
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel any ongoing conversation and return to admin panel"""
@@ -886,169 +1069,6 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user responses to notifications"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Parse the callback data
-    _, response, user_id = query.data.split(':')
-    user_id = int(user_id)
-    
-    # Get the user who responded
-    user = await get_user_async(user_id)
-    if not user:
-        return
-    
-    # Get the notification responses from context
-    if 'notify_responses' not in context.user_data:
-        return
-    
-    responses = context.user_data['notify_responses']
-    user_info = f"{user.name} ({user.telegram_id})"
-    
-    # Update the response tracking
-    if response == 'yes':
-        if user_info not in responses['yes']:
-            responses['yes'].append(user_info)
-    else:  # response == 'no'
-        if user_info not in responses['no']:
-            responses['no'].append(user_info)
-    
-    # Edit the message to remove the buttons
-    await query.message.edit_text(
-        f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
-    )
-
-async def show_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show current kassa amount from Google Sheets"""
-    try:
-        # Get the worksheet
-        worksheet = await get_worksheet()
-        if not worksheet:
-            await update.message.reply_text("❌ Google Sheets bilan bog'lanishda xatolik yuz berdi.")
-            return ConversationHandler.END
-
-        # Get all values
-        all_values = worksheet.get_all_values()
-        if not all_values:
-            await update.message.reply_text("❌ Ma'lumotlar topilmadi.")
-            return ConversationHandler.END
-
-        # Find kassa value (assuming it's in the last column)
-        kassa_value = None
-        for row in all_values[1:]:  # Skip header row
-            if len(row) >= 5:  # Assuming kassa is in column E (5th column)
-                try:
-                    kassa_value = float(row[4].replace(',', ''))  # Convert to float, handle comma-separated numbers
-                    break
-                except (ValueError, IndexError):
-                    continue
-
-        if kassa_value is None:
-            await update.message.reply_text("❌ Kassa miqdori topilmadi.")
-            return ConversationHandler.END
-
-        # Format and send the message
-        message = f"💰 *Kassa miqdori:* {kassa_value:,.0f} so'm"
-        await update.message.reply_text(
-            message,
-            parse_mode='Markdown',
-            reply_markup=get_admin_kb()
-        )
-        return ConversationHandler.END
-
-    except Exception as e:
-        logger.error(f"Error showing kassa: {str(e)}")
-        await update.message.reply_text(
-            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
-            reply_markup=get_admin_kb()
-        )
-        return ConversationHandler.END
-
-async def send_summary():
-    """Send daily summary to admin"""
-    try:
-        # Get current date in Tashkent
-        tz = pytz.timezone('Asia/Tashkent')
-        now = datetime.now(tz)
-        today = now.strftime('%Y-%m-%d')
-        
-        # Get all users
-        users = await get_all_users_async()
-        if not users:
-            logger.warning("No users found for summary")
-            return
-            
-        # Get all food choices for today
-        food_choices = await get_food_choices_for_date(today)
-        
-        # Count statistics
-        total_users = len(users)
-        attending_users = sum(1 for u in users if u.attendance and today in u.attendance)
-        declined_users = sum(1 for u in users if u.declined_days and today in u.declined_days)
-        no_response = total_users - attending_users - declined_users
-        
-        # Group food choices
-        food_stats = {}
-        for choice in food_choices:
-            food_name = choice.get('food_name', 'Unknown')
-            food_stats[food_name] = food_stats.get(food_name, 0) + 1
-            
-        # Format message
-        message = f"📊 *Daily Summary for {today}*\n\n"
-        message += f"👥 Total Users: {total_users}\n"
-        message += f"✅ Attending: {attending_users}\n"
-        message += f"❌ Declined: {declined_users}\n"
-        message += f"⏳ No Response: {no_response}\n\n"
-        
-        if food_stats:
-            message += "*Food Choices:*\n"
-            for food, count in food_stats.items():
-                message += f"• {food}: {count}\n"
-                
-        # Send to all admins
-        for user in users:
-            if user.is_admin:
-                try:
-                    await bot.send_message(
-                        user.telegram_id,
-                        message,
-                        parse_mode='Markdown'
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending summary to admin {user.telegram_id}: {str(e)}")
-        
-        # Update Google Sheets with new balances
-        for user in users:
-            if user.attendance and today in user.attendance:
-                # Deduct daily price from balance
-                user.balance -= user.daily_price
-                user.save()
-                
-                # Update balance in Google Sheets
-                await update_user_balance_in_sheet(user.telegram_id, user.balance)
-                
-        # Sync all balances from sheet to ensure consistency
-        sync_result = await sync_balances_from_sheet()
-        if not sync_result.get('success'):
-            logger.error(f"Error syncing balances after summary: {sync_result.get('error')}")
-            
-    except Exception as e:
-        logger.error(f"Error in send_summary: {str(e)}")
-
-async def hourly_sync_balances():
-    """Sync balances from Google Sheets to database every hour"""
-    try:
-        logger.info("Starting hourly balance sync from Sheets")
-        result = await sync_balances_from_sheet()
-        if result.get('success'):
-            logger.info(f"Hourly sync completed: {result['updated']} users updated, {result['errors']} errors")
-        else:
-            logger.error(f"Hourly sync failed: {result.get('error')}")
-    except Exception as e:
-        logger.error(f"Error in hourly sync: {str(e)}")
-
 # ─── 10) REGISTER ALL HANDLERS ─────────────────────────────────────────────────
 def register_handlers(app):
     # Initialize collections
@@ -1061,7 +1081,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("notify_all", notify_all))
     logger.info("notify_all command handler registered")
 
-    # (2) single‐step buttons
+    # (2) single-step buttons
     for txt, fn in [
         (FOYD_BTN,     list_users_exec),
         (ADD_ADMIN_BTN,start_add_admin),
@@ -1071,9 +1091,15 @@ def register_handlers(app):
         (CXL_LUNCH_ALL_BTN, cancel_lunch_day),
         (CARD_MANAGE_BTN, start_card_management),
         (KASSA_BTN,    show_kassa),
+        (MENU_BTN,     menu_panel),
         (BACK_BTN,     back_to_menu),
     ]:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(txt)}$"), fn))
+
+    # Add menu callback handlers
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1|del_menu2|menu_back|menu_panel)$"))
+    app.add_handler(CallbackQueryHandler(handle_menu_del, pattern=r"^del_(menu1|menu2):.*$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
 
     # Lunch cancellation conversation handler
     cancel_conv = ConversationHandler(
@@ -1117,25 +1143,12 @@ def register_handlers(app):
     )
     app.add_handler(card_conv)
 
-    # Daily price conversation handler
-    price_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
-        states={
-            S_SET_PRICE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_daily_price),
-                CallbackQueryHandler(daily_price_callback, pattern=r"^back_to_price_list$")
-            ]
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
-            CallbackQueryHandler(daily_price_callback, pattern=r"^back_to_menu$"),
-            CommandHandler("cancel", cancel_conversation)
-        ],
-        allow_reentry=True,
-        name="price_conversation",
-        per_message=True
-    )
-    app.add_handler(price_conv)
+    # Add price change handlers
+    app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=r"^set_price:\d+$"))
+    app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=r"^confirm_price:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=r"^custom_price:\d+$"))
+    app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=r"^back_to_price_list$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price))
 
     # Notify all conversation handler
     notify_conv = ConversationHandler(
@@ -1166,11 +1179,460 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
     logger.info("notify response callback handler registered")
 
-    # Register hourly sync job
-    job_queue = app.job_queue
-    job_queue.run_repeating(
-        hourly_sync_balances,
-        interval=3600,  # 1 hour in seconds
-        first=10  # Start after 10 seconds
+    # Add MENU_BTN to admin keyboard (already done above)
+    # Add MessageHandler for MENU_BTN
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(MENU_BTN)}$"), menu_panel))
+    # Add CallbackQueryHandler for menu_callback
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1|del_menu2|menu_back|menu_panel)$"))
+    # Add MessageHandler for handle_menu_add (text input for adding food)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
+
+async def show_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current kassa amount from Google Sheets"""
+    try:
+        worksheet = await get_worksheet()
+        if not worksheet:
+            await update.message.reply_text("❌ Google Sheets bilan bog'lanishda xatolik yuz berdi.")
+            return
+
+        kassa_value = worksheet.cell(2, 4).value  # D2
+        if not kassa_value:
+            await update.message.reply_text("❌ Kassa miqdori topilmadi.")
+            return
+
+        try:
+            kassa_value = float(str(kassa_value).replace(',', ''))
+        except Exception:
+            await update.message.reply_text("❌ Kassa miqdorini o'qishda xatolik.")
+            return
+
+        message = f"💰 *Kassa miqdori:* {kassa_value:,.0f} so'm"
+        await update.message.reply_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=get_admin_kb()
+        )
+    except Exception as e:
+        logger.error(f"Error showing kassa: {str(e)}")
+        await update.message.reply_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_admin_kb()
+        )
+
+async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user responses to notifications"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse the callback data
+    _, response, user_id = query.data.split(':')
+    user_id = int(user_id)
+    
+    # Get the user who responded
+    user = await get_user_async(user_id)
+    if not user:
+        return
+    
+    # Get the notification responses from context
+    if 'notify_responses' not in context.user_data:
+        return
+    
+    responses = context.user_data['notify_responses']
+    user_info = f"{user.name} ({user.telegram_id})"
+    
+    # Update the response tracking
+    if response == 'yes':
+        if user_info not in responses['yes']:
+            responses['yes'].append(user_info)
+    else:  # response == 'no'
+        if user_info not in responses['no']:
+            responses['no'].append(user_info)
+    
+    # Edit the message to remove the buttons
+    await query.message.edit_text(
+        f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
     )
+
+async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
+    """Send final summary at 10:00 AM"""
+    job = context.job
+    chat_id = job.data['chat_id']
+    message_id = job.data['message_id']
+    
+    if 'notify_responses' in context.user_data:
+        responses = context.user_data['notify_responses']
+        total_sent = responses['total_sent']
+        yes_count = len(responses['yes'])
+        no_count = len(responses['no'])
+        pending = total_sent - yes_count - no_count
+        
+        summary = (
+            f"📊 Xabar yuborish yakuniy natijalari:\n\n"
+            f"👥 Jami: {total_sent} kishi\n\n"
+            f"📝 Ro'yxat:\n"
+        )
+        
+        # Add yes responses
+        for i, user in enumerate(responses['yes'], 1):
+            summary += f"{i}. {user}\n"
+        
+        # Add food choices if available
+        if responses['food_choices']:
+            summary += f"\n🍽 Taomlar statistikasi:\n"
+            for food, users in responses['food_choices'].items():
+                summary += f"{len(users)}. {food} — {len(users)} ta\n"
+        
+        # Add no responses
+        if responses['no']:
+            summary += f"\n❌ Rad etganlar:\n"
+            for i, user in enumerate(responses['no'], 1):
+                summary += f"{i}. {user}\n"
+        
+        # Add pending responses
+        if pending > 0:
+            summary += f"\n⏳ Javob bermaganlar:\n"
+            all_users = set(f"{u['name']} ({u['telegram_id']})" for u in await get_all_users_async())
+            responded = set(responses['yes'] + responses['no'])
+            pending_users = all_users - responded
+            for i, user in enumerate(pending_users, 1):
+                summary += f"{i}. {user}\n"
+        
+        # Add failed deliveries
+        if responses['failed']:
+            summary += f"\n❌ Yuborilmadi:\n"
+            for i, user in enumerate(responses['failed'], 1):
+                summary += f"{i}. {user}\n"
+        
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=summary
+            )
+        except Exception as e:
+            print(f"Error sending final summary: {e}")
+        
+        # Clear the stored data
+        if 'notify_responses' in context.user_data:
+            del context.user_data['notify_responses']
+        if 'notify_message_id' in context.user_data:
+            del context.user_data['notify_message_id']
+
+# Show Menyu panel
+async def menu_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = get_menu_kb()
+    text = "Menyu boshqaruvi:"
+    if update.message:
+        await update.message.reply_text(text, reply_markup=kb)
+    elif update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(text, reply_markup=kb)
+        except BadRequest as e:
+            if "Message is not modified" not in str(e):
+                raise
+
+# View menu1/menu2
+async def view_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, menu_name):
+    try:
+        if menu_col is None:
+            await init_collections()
+        doc = await menu_col.find_one({"name": menu_name})
+        items = doc["items"] if doc and "items" in doc else []
+        if not items:
+            await update.callback_query.edit_message_text(
+                f"{menu_name}da taom yo'q.", 
+                reply_markup=get_menu_kb()
+            )
+        else:
+            menu_text = f"🍽 {menu_name} taomlari:\n\n" + "\n".join(f"• {item}" for item in items)
+            await update.callback_query.edit_message_text(
+                menu_text,
+                reply_markup=get_menu_kb()
+            )
+    except Exception as e:
+        logger.error(f"Error in view_menu: {e}")
+        await update.callback_query.edit_message_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_menu_kb()
+        )
+
+# Add food to menu1/menu2
+async def add_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, menu_name):
+    try:
+        if menu_col is None:
+            await init_collections()
+        context.user_data["pending_menu_add"] = menu_name
+        await update.callback_query.edit_message_text(
+            f"Yangi taom nomini kiriting ({menu_name}):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(ORTGA_BTN, callback_data="menu_panel")]])
+        )
+    except Exception as e:
+        logger.error(f"Error in add_menu: {e}")
+        await update.callback_query.edit_message_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_menu_kb()
+        )
+
+async def handle_menu_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if menu_col is None:
+            await init_collections()
+        menu_name = context.user_data.get("pending_menu_add")
+        if not menu_name:
+            await update.message.reply_text(
+                "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+                reply_markup=get_menu_kb()
+            )
+            return
+        food = update.message.text.strip()
+        if not food:
+            await update.message.reply_text(
+                "❌ Taom nomi bo'sh bo'lmasligi kerak.",
+                reply_markup=get_menu_kb()
+            )
+            return
+        result = await menu_col.update_one(
+            {"name": menu_name},
+            {"$addToSet": {"items": food}},
+            upsert=True
+        )
+        if result.modified_count > 0 or result.upserted_id:
+            await update.message.reply_text(
+                f"✅ {food} {menu_name}ga qo'shildi!",
+                reply_markup=get_menu_kb()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Taom qo'shilmadi. Iltimos, qaytadan urinib ko'ring.",
+                reply_markup=get_menu_kb()
+            )
+        context.user_data.pop("pending_menu_add", None)
+    except Exception as e:
+        logger.error(f"Error in handle_menu_add: {e}")
+        await update.message.reply_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_menu_kb()
+        )
+
+# Remove food from menu1/menu2
+async def del_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, menu_name):
+    try:
+        if menu_col is None:
+            await init_collections()
+        doc = await menu_col.find_one({"name": menu_name})
+        items = doc["items"] if doc and "items" in doc else []
+        if not items:
+            await update.callback_query.edit_message_text(
+                f"{menu_name}da taom yo'q.",
+                reply_markup=get_menu_kb()
+            )
+            return
+        kb = [[InlineKeyboardButton(item, callback_data=f"del_{menu_name}:{item}")] for item in items]
+        kb.append([InlineKeyboardButton(ORTGA_BTN, callback_data="menu_panel")])
+        await update.callback_query.edit_message_text(
+            f"O'chirish uchun taom tanlang ({menu_name}):",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
+    except Exception as e:
+        logger.error(f"Error in del_menu: {e}")
+        await update.callback_query.edit_message_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_menu_kb()
+        )
+
+async def handle_menu_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if menu_col is None:
+            await init_collections()
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data.startswith("del_menu1:"):
+            menu_name = "menu1"
+            food = data[len("del_menu1:"):]
+        elif data.startswith("del_menu2:"):
+            menu_name = "menu2"
+            food = data[len("del_menu2:"):]
+        else:
+            await query.edit_message_text(
+                "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+                reply_markup=get_menu_kb()
+            )
+            return
+        result = await menu_col.update_one(
+            {"name": menu_name},
+            {"$pull": {"items": food}}
+        )
+        if result.modified_count > 0:
+            await query.edit_message_text(
+                f"✅ {food} {menu_name}dan o'chirildi!",
+                reply_markup=get_menu_kb()
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Taom o'chirilmadi. Iltimos, qaytadan urinib ko'ring.",
+                reply_markup=get_menu_kb()
+            )
+    except Exception as e:
+        logger.error(f"Error in handle_menu_del: {e}")
+        await update.callback_query.edit_message_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_menu_kb()
+        )
+
+# Menu callback handler
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if menu_col is None:
+            await init_collections()
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data == "view_menu1":
+            await view_menu(update, context, "menu1")
+        elif data == "view_menu2":
+            await view_menu(update, context, "menu2")
+        elif data == "add_menu1":
+            await add_menu(update, context, "menu1")
+        elif data == "add_menu2":
+            await add_menu(update, context, "menu2")
+        elif data == "del_menu1":
+            await del_menu(update, context, "menu1")
+        elif data == "del_menu2":
+            await del_menu(update, context, "menu2")
+        elif data == "menu_panel" or data == "menu_back":
+            await menu_panel(update, context)
+        elif data.startswith("del_menu1:") or data.startswith("del_menu2:"):
+            await handle_menu_del(update, context)
+        else:
+            await query.edit_message_text(
+                "❌ Noma'lum buyruq.",
+                reply_markup=get_menu_kb()
+            )
+    except Exception as e:
+        logger.error(f"Error in menu_callback: {e}")
+        await update.callback_query.edit_message_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+            reply_markup=get_menu_kb()
+        )
+
+async def send_summary(context: ContextTypes.DEFAULT_TYPE):
+    """Send daily summary to admin with defensive checks and error logging."""
+    try:
+        tz = pytz.timezone('Asia/Tashkent')
+        now = datetime.now(tz)
+        today = now.strftime('%Y-%m-%d')
+
+        users = await get_all_users_async()
+        if not users:
+            logger.warning("No users found for summary")
+            return
+
+        attendees = []
+        attendee_details = []
+        declined_users = []
+        non_attendees = []
+
+        for u in users:
+            try:
+                attendance = getattr(u, 'attendance', []) or []
+                declined_days = getattr(u, 'declined_days', []) or []
+                food_choices = getattr(u, 'food_choices', {}) or {}
+                name = getattr(u, 'name', str(u))
+                if today in attendance:
+                    attendees.append(u)
+                    # Defensive: get food choice safely
+                    try:
+                        food_choice = await u.get_food_choice(today) if hasattr(u, 'get_food_choice') else food_choices.get(today, None)
+                    except Exception as e:
+                        logger.error(f"Error getting food choice for {name}: {e}")
+                        food_choice = None
+                    attendee_details.append((name, food_choice))
+                elif today in declined_days:
+                    declined_users.append(name)
+                else:
+                    non_attendees.append(name)
+            except Exception as e:
+                logger.error(f"Error processing user in summary: {e}")
+                continue
+
+        # Get food counts using aggregation, with error handling
+        try:
+            food_counts = await User.get_daily_food_counts(today)
+        except Exception as e:
+            logger.error(f"Error in get_daily_food_counts: {e}")
+            food_counts = {}
+
+        # Find the most popular food(s) with proper tie handling
+        most_popular_foods = []
+        if food_counts:
+            try:
+                max_count = max(data['count'] for data in food_counts.values())
+                tied_foods = [food for food, data in food_counts.items() if data['count'] == max_count]
+                if len(tied_foods) > 1:
+                    most_popular_foods = sorted(tied_foods)
+                else:
+                    most_popular_foods = [tied_foods[0]]
+            except Exception as e:
+                logger.error(f"Error finding most popular foods: {e}")
+
+        # Build the summary message
+        admin_summary = "📊 *Bugungi tushlik uchun yig'ilish:*\n\n"
+        admin_summary += f"👥 Jami: *{len(attendees)}* kishi\n\n"
+        admin_summary += "📝 *Ro'yxat:*\n"
+        if attendee_details:
+            for i, (name, food) in enumerate(attendee_details, 1):
+                food_text = f" - {food}" if food else " - Tanlanmagan"
+                admin_summary += f"{i}. {name}{food_text}\n"
+        else:
+            admin_summary += "Hech kim yo'q\n"
+        admin_summary += "\n"
+        admin_summary += "🍽 *Taomlar statistikasi:*\n"
+        if food_counts:
+            rank = 1
+            for food, data in food_counts.items():
+                admin_summary += f"{rank}. {food} — {data['count']} ta\n"
+                rank += 1
+        else:
+            admin_summary += "— Hech qanday taom tanlanmadi\n"
+        if declined_users:
+            admin_summary += "\n❌ *Rad etganlar:*\n"
+            for i, name in enumerate(declined_users, 1):
+                admin_summary += f"{i}. {name}\n"
+        if non_attendees:
+            admin_summary += "\n❓ *Javob bermaganlar:*\n"
+            for i, name in enumerate(non_attendees, 1):
+                admin_summary += f"{i}. {name}\n"
+
+        # Send to admins
+        for u_admin_check in users:
+            try:
+                if getattr(u_admin_check, 'is_admin', False):
+                    await context.bot.send_message(
+                        u_admin_check.telegram_id,
+                        admin_summary,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send admin summary to {getattr(u_admin_check, 'name', str(u_admin_check))}: {e}")
+
+        # Update Google Sheets with new balances
+        for user in attendees:
+            try:
+                if hasattr(user, 'balance') and hasattr(user, 'daily_price'):
+                    user.balance -= user.daily_price
+                    await user.save()
+                    await update_user_balance_in_sheet(user.telegram_id, user.balance)
+            except Exception as e:
+                logger.error(f"Error updating balance in Sheets for {getattr(user, 'name', str(user))}: {e}")
+
+        # Sync all balances from sheet to ensure consistency
+        try:
+            sync_result = await sync_balances_from_sheet()
+            if not sync_result.get('success'):
+                logger.error(f"Error syncing balances after summary: {sync_result.get('error')}")
+        except Exception as e:
+            logger.error(f"Error in sync_balances_from_sheet: {e}")
+
+    except Exception as e:
+        logger.error(f"Error in send_summary: {str(e)}")
 

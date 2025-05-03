@@ -1,5 +1,4 @@
-# main.py
-
+#!/usr/bin/env python3
 import logging
 import os
 import datetime
@@ -17,9 +16,10 @@ else:
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
+from telegram.error import TimedOut, NetworkError
 
 from database import init_db
-from config import BOT_TOKEN
+from config import BOT_TOKEN, MONGODB_URI
 from models.user_model import User
 
 # Configure logging for Railway
@@ -93,7 +93,7 @@ def main():
     if not os.getenv("BOT_TOKEN", BOT_TOKEN):
         logger.error("BOT_TOKEN is not set!")
         exit(1)
-    if not os.getenv("MONGODB_URI"):
+    if not os.getenv("MONGODB_URI", MONGODB_URI):
         logger.error("MONGODB_URI is not set!")
         exit(1)
 
@@ -104,11 +104,16 @@ def main():
     try:
         # 3) Initialize database
         loop.run_until_complete(init_db())
+        logger.info("Database initialized successfully")
 
         # 4) Build the Telegram Application
         application = (
             ApplicationBuilder()
             .token(os.getenv("BOT_TOKEN", BOT_TOKEN))
+            .connect_timeout(30.0)
+            .read_timeout(30.0)
+            .write_timeout(30.0)
+            .get_updates_read_timeout(30.0)
             .build()
         )
 
@@ -138,7 +143,7 @@ def main():
 
         # Attendance summary at 10:00 Mon–Fri
         jq.run_daily(
-            callback=uh.send_summary,
+            callback=ah.send_summary,
             time=datetime.time(hour=10, minute=0, tzinfo=tz),
             days=(0, 1, 2, 3, 4),
             name="daily_summary"
@@ -153,14 +158,16 @@ def main():
 
         logger.info("Bot is starting...")
         # 7) Start polling (this is blocking and manages its own loop)
-        application.run_polling(allowed_updates=["message", "callback_query"])
+        application.run_polling(
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True
+        )
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         raise
     finally:
         # Clean up the lock file
         cleanup_lock(instance_lock, os.path.join(tempfile.gettempdir(), 'lunch_bot.lock'))
-
 
 if __name__ == "__main__":
     main()
