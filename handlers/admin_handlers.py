@@ -35,7 +35,6 @@ from utils import (
     is_admin,
 )
 from config import DEFAULT_DAILY_PRICE
-from sheets_utils import fetch_all_rows
 
 # Initialize collections
 kassa_col = None
@@ -1171,9 +1170,6 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
     logger.info("notify response callback handler registered")
 
-    # Add sync_balances command handler
-    app.add_handler(CommandHandler("sync_balances", sync_balances))
-
 async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle user responses to notifications"""
     query = update.callback_query
@@ -1207,32 +1203,3 @@ async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT
     await query.message.edit_text(
         f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
     )
-
-async def sync_balances(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to sync user balances from Google Sheets."""
-    user_id = update.effective_user.id
-    caller = await get_user_async(user_id)
-    if not caller or not caller.is_admin:
-        await update.message.reply_text("❌ Siz admin emassiz.")
-        return
-
-    await update.message.reply_text("⏳ Google Sheets'dan balanslar yuklanmoqda...")
-    rows = fetch_all_rows()
-    updated = 0
-    not_found = []
-    for row in rows:
-        telegram_id = row.get('telegram_id')
-        balance = row.get('balance')
-        if not telegram_id or balance is None:
-            continue
-        user = await get_user_async(int(telegram_id))
-        if user:
-            user.balance = float(balance)
-            await user.save()
-            updated += 1
-        else:
-            not_found.append(str(telegram_id))
-    msg = f"✅ {updated} ta foydalanuvchi balansi yangilandi."
-    if not_found:
-        msg += f"\n❗ Topilmadi: {', '.join(not_found)}"
-    await update.message.reply_text(msg)
