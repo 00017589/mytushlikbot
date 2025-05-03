@@ -1,3 +1,12 @@
+import os
+
+# Ensure credentials.json exists from env variable before any Google API usage
+if not os.path.exists("credentials.json"):
+    creds = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if creds:
+        with open("credentials.json", "w") as f:
+            f.write(creds)
+
 import gspread
 import logging
 from google.oauth2.service_account import Credentials
