@@ -248,7 +248,10 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user = await get_user_async(update.effective_user.id)
     if not user:
-        await query.message.edit_text("❌ Siz ro'yxatdan o'tmagansiz. /start buyrug'ini yuboring.")
+        await query.message.edit_text(
+            "❌ Siz ro'yxatdan o'tmagansiz. /start buyrug'ini yuboring.",
+            reply_markup=InlineKeyboardMarkup([[]])
+        )
         return
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.datetime.now(tz)
@@ -260,13 +263,17 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if today in user.attendance:
             await user.remove_attendance(today, is_test=is_test)
         await user.decline_attendance(today)
-        await query.message.edit_text("❌ Bugungi tushlik rad etildi.")
+        await query.message.edit_text(
+            "❌ Bugungi tushlik rad etildi.",
+            reply_markup=InlineKeyboardMarkup([[]])
+        )
         return
     if query.data.endswith(YES):
         if today in user.attendance and not is_test:
             logger.warning(f"attendance_cb: Blocking regular user {user.name} who already attended today.")
             await query.message.edit_text(
-                f"⚠️ Siz bugun allaqachon ro'yxatdasiz. Balansingiz: {user.balance} so'm."
+                f"⚠️ Siz bugun allaqachon ro'yxatdasiz. Balansingiz: {user.balance} so'm.",
+                reply_markup=InlineKeyboardMarkup([[]])
             )
             return
         if is_test and today in user.attendance:
@@ -286,7 +293,7 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{prefix}🍽 Iltimos, taom tanlang:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-
+        
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle food selection callback"""
     query = update.callback_query
@@ -295,7 +302,10 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get user
     user = await get_user_async(update.effective_user.id)
     if not user:
-        await query.message.edit_text("❌ Foydalanuvchi topilmadi.")
+        await query.message.edit_text(
+            "❌ Foydalanuvchi topilmadi.",
+            reply_markup=InlineKeyboardMarkup([[]])  # Empty keyboard to remove previous one
+        )
         return
         
     # Check if it's test mode
@@ -309,21 +319,16 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if now.hour >= 10:
             await query.message.edit_text(
                 "❌ Kechirasiz, 10:00 dan keyin bekor qilish imkoni yo'q.",
-                reply_markup=get_user_kb(user)
+                reply_markup=InlineKeyboardMarkup([[]])  # Empty keyboard to remove previous one
             )
             return
             
-        # Remove from attendance
-        if user.attendance:
-            user.attendance.remove(now.strftime('%Y-%m-%d'))
-            user.save()
-            
-        # Remove food choice
-        await remove_food_choice(user.telegram_id, now.strftime('%Y-%m-%d'))
+        # Remove from attendance and food choice
+        await user.remove_attendance(now.strftime('%Y-%m-%d'))
         
         await query.message.edit_text(
             "✅ Ovqatga qatnashish bekor qilindi.",
-            reply_markup=get_user_kb(user)
+            reply_markup=InlineKeyboardMarkup([[]])  # Empty keyboard to remove previous one
         )
         return
         
@@ -331,18 +336,16 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if callback_data.startswith("food:"):
         food_name = callback_data[5:]  # Remove "food:" prefix
         
-        # Save food choice
-# Save food choice using the User class method
+        # Save food choice using the User class method
         tz = pytz.timezone("Asia/Tashkent")
         today = datetime.datetime.now(tz).strftime("%Y-%m-%d")
         await user.set_food_choice(today, food_name)
         
         await query.message.edit_text(
             f"✅ {food_name} tanlandi!",
-            reply_markup=get_user_kb(user)
+            reply_markup=InlineKeyboardMarkup([[]])  # Empty keyboard to remove previous one
         )
         return
-
 def get_user_kb(user):
     """Get user keyboard with dynamic cancel lunch button"""
     keyboard = [
