@@ -332,7 +332,10 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         food_name = callback_data[5:]  # Remove "food:" prefix
         
         # Save food choice
-        await save_food_choice(user.telegram_id, food_name)
+# Save food choice using the User class method
+        tz = pytz.timezone("Asia/Tashkent")
+        today = datetime.datetime.now(tz).strftime("%Y-%m-%d")
+        await user.set_food_choice(today, food_name)
         
         await query.message.edit_text(
             f"✅ {food_name} tanlandi!",
