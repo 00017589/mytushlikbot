@@ -647,6 +647,11 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if query.data == "back_to_menu":
         await query.message.edit_text(
             "Admin panel:",
+            reply_markup=InlineKeyboardMarkup([[]])  # Remove inline keyboard
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="🔧 Admin panelga xush kelibsiz:",
             reply_markup=get_admin_kb()
         )
         return ConversationHandler.END
@@ -659,6 +664,11 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             if not user:
                 await query.message.edit_text(
                     "❌ Foydalanuvchi topilmadi.",
+                    reply_markup=InlineKeyboardMarkup([[]])  # Remove inline keyboard
+                )
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="🔧 Admin panelga xush kelibsiz:",
                     reply_markup=get_admin_kb()
                 )
                 return ConversationHandler.END
@@ -672,9 +682,10 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             # Delete the user
             await users_col.delete_one({"telegram_id": user_id})
             
-            # Send confirmation
+            # Send confirmation and remove inline keyboard
             await query.message.edit_text(
-                f"✅ {user['name']} muvaffaqiyatli o'chirildi!"
+                f"✅ {user['name']} muvaffaqiyatli o'chirildi!",
+                reply_markup=InlineKeyboardMarkup([[]])  # Remove inline keyboard
             )
             
             # Send admin panel
@@ -688,6 +699,11 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.error(f"Error deleting user: {e}")
             await query.message.edit_text(
                 "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
+                reply_markup=InlineKeyboardMarkup([[]])  # Remove inline keyboard
+            )
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="🔧 Admin panelga xush kelibsiz:",
                 reply_markup=get_admin_kb()
             )
         
