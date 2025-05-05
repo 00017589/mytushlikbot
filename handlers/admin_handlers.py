@@ -29,6 +29,7 @@ from config import DEFAULT_DAILY_PRICE
 
 menu_col = None
 logger = logging.getLogger(__name__)
+
 # ─── STATES ────────────────────────────────────────────────────────────────────
 (
     S_ADD_ADMIN,      # selecting user to promote
@@ -1124,6 +1125,6 @@ def register_handlers(app):
 
     # ─── 9) Schedule daily lunch summary ─────────────────────────────────
     tz = pytz.timezone("Asia/Tashkent")
-    app.job_queue.run_daily(send_summary, time=dt_time(9, 0, tzinfo=tz), name="daily_summary")
+    app.job_queue.run_daily(send_summary, time=dt_time(10, 0, tzinfo=tz), name="daily_summary")
 
     logging.info("All admin handlers registered.")
