@@ -42,7 +42,10 @@ def get_worksheet():
         worksheet = sh.worksheet(WORKSHEET_NAME)
         return worksheet
     except Exception as e:
-        logger.error(f"Error getting worksheet: {str(e)}")
+        logger.error(f"Unexpected error getting worksheet: {repr(e)} (type: {type(e)})")
+        # If it's a Response object, print more details
+        if hasattr(e, 'status_code'):
+            logger.error(f"Response status: {e.status_code}, content: {getattr(e, 'content', '')}")
         return None
 
 async def fetch_all_rows():
