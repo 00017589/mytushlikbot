@@ -22,6 +22,9 @@ from telegram.error import NetworkError, TimedOut
 from database import init_db
 from config import BOT_TOKEN, MONGODB_URI
 from models.user_model import User
+# Register handlers
+import handlers.user_handlers as uh
+import handlers.admin_handlers as ah
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -104,10 +107,6 @@ def main():
             .build()
         )
         application.add_error_handler(error_handler)
-
-        # Register handlers
-        import handlers.user_handlers as uh
-        import handlers.admin_handlers as ah
 
         uh.register_handlers(application)
         ah.register_handlers(application)
