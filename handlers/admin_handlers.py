@@ -29,7 +29,6 @@ from config import DEFAULT_DAILY_PRICE
 
 menu_col = None
 logger = logging.getLogger(__name__)
-
 # ─── STATES ────────────────────────────────────────────────────────────────────
 (
     S_ADD_ADMIN,      # selecting user to promote
