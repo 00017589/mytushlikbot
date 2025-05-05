@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 import logging
 import os
+import sys
+import asyncio
+import tempfile
+import atexit
+from datetime import time as dt_time
 import datetime
 import pytz
-import asyncio
-import sys
-import atexit
-import tempfile
 
-# Cross-platform imports for file locking
+# Cross‑platform file locking
 if os.name == 'nt':
     import msvcrt
 else:
@@ -16,97 +17,83 @@ else:
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
-from telegram.error import TimedOut, NetworkError
+from telegram.error import NetworkError, TimedOut
 
 from database import init_db
 from config import BOT_TOKEN, MONGODB_URI
 from models.user_model import User
 
-# Configure logging for Railway
+logger = logging.getLogger(__name__)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
 
 async def error_handler(update, context):
-    """Log Errors caused by Updates."""
-    logger.error(f"Update {update} caused error {context.error}")
-    
-    # Get the error's traceback
+    logger.error(f"Update {update} caused error {context.error}", exc_info=True)
     import traceback
-    traceback.print_exc()
-    
-    # Send error messages to admin
+    tb = traceback.format_exc()
     ADMIN_ID = 5192568051
     try:
         await context.bot.send_message(
-            chat_id=ADMIN_ID, 
-            text=f"❌ Xatolik yuz berdi:\n\nXato: {context.error}\n\nTraceback: {traceback.format_exc()[:1000]}"
+            chat_id=ADMIN_ID,
+            text=f"❌ Xatolik:\n{context.error}\n\n{tb[:1000]}"
         )
     except Exception as e:
-        logger.error(f"Failed to send error notification to admin: {e}")
+        logger.error(f"Failed to notify admin: {e}")
 
 def check_single_instance():
-    """Ensure only one instance of the bot is running (cross-platform)"""
-    lock_file = os.path.join(tempfile.gettempdir(), 'lunch_bot.lock')
-    lock_fd = open(lock_file, 'w')
+    lock_file = os.path.join(tempfile.gettempdir(), "lunch_bot.lock")
+    fd = open(lock_file, "w")
     try:
-        if os.name == 'nt':
-            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        if os.name == "nt":
+            msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
         else:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        atexit.register(lambda: cleanup_lock(lock_fd, lock_file))
-        return lock_fd
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        atexit.register(lambda: cleanup_lock(fd, lock_file))
+        return fd
     except Exception:
-        lock_fd.close()
-        logger.error("Bot is already running! Exiting.")
+        fd.close()
+        logger.error("Bot already running, exiting.")
         sys.exit(1)
 
-def cleanup_lock(lock_fd, lock_file):
+def cleanup_lock(fd, path):
     try:
-        if os.name == 'nt':
-            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+        if os.name == "nt":
+            msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
         else:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        lock_fd.close()
-        if os.path.exists(lock_file):
-            os.remove(lock_file)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
+        if os.path.exists(path):
+            os.remove(path)
     except Exception:
         pass
 
 async def cleanup_old_data(context):
-    """Cleanup job that runs at midnight"""
-    logger.info("Running midnight cleanup job...")
-    # Only clean up real data - test data is cleaned up immediately after test summary
+    logger.info("Midnight cleanup…")
     await User.cleanup_old_food_choices(is_test=False)
-    logger.info("Midnight cleanup completed")
+    logger.info("Cleanup done.")
 
 def main():
-    """Main entrypoint: initialize DB, build app, register handlers, schedule jobs, and start polling."""
-    # 0) Check single instance
-    instance_lock = check_single_instance()
-    
-    # 1) Load .env
+    # Single‑instance guard
+    lock_fd = check_single_instance()
+
+    # Load env
     load_dotenv()
+    if not os.getenv("BOT_TOKEN", BOT_TOKEN) or not os.getenv("MONGODB_URI", MONGODB_URI):
+        logger.error("Missing BOT_TOKEN or MONGODB_URI")
+        sys.exit(1)
 
-    if not os.getenv("BOT_TOKEN", BOT_TOKEN):
-        logger.error("BOT_TOKEN is not set!")
-        exit(1)
-    if not os.getenv("MONGODB_URI", MONGODB_URI):
-        logger.error("MONGODB_URI is not set!")
-        exit(1)
-
-    # 2) Create and set event loop
+    # Asyncio loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     try:
-        # 3) Initialize database
+        # Init DB
         loop.run_until_complete(init_db())
-        logger.info("Database initialized successfully")
+        logger.info("Database ready")
 
-        # 4) Build the Telegram Application
+        # Build app
         application = (
             ApplicationBuilder()
             .token(os.getenv("BOT_TOKEN", BOT_TOKEN))
@@ -116,57 +103,61 @@ def main():
             .get_updates_read_timeout(30.0)
             .build()
         )
-
-        # Add error handler
         application.add_error_handler(error_handler)
 
-        # 5) Import and register handlers now that app exists
+        # Register handlers
         import handlers.user_handlers as uh
         import handlers.admin_handlers as ah
-        import handlers.balance_handlers as bh
 
         uh.register_handlers(application)
         ah.register_handlers(application)
-        bh.register_handlers(application)
 
-        # 6) Schedule daily jobs
+        # Schedule jobs
         jq = application.job_queue
         tz = pytz.timezone("Asia/Tashkent")
-        # Morning survey at 7:00 Mon–Fri
+
+        # Morning prompt 07:00 Mon–Fri
         jq.run_daily(
-            callback=uh.morning_prompt,
-            time=datetime.time(hour=7, minute=0, tzinfo=tz),
+            uh.morning_prompt,
+            time=dt_time(7, 0, tzinfo=tz),
             days=(0, 1, 2, 3, 4),
             name="morning_survey"
         )
 
-        # Attendance summary at 10:00 Mon–Fri
+        # Daily summary 10:00 Mon–Fri
         jq.run_daily(
-            callback=ah.send_summary,
-            time=datetime.time(hour=10, minute=0, tzinfo=tz),
+            ah.send_summary,
+            time=dt_time(10, 0, tzinfo=tz),
             days=(0, 1, 2, 3, 4),
             name="daily_summary"
         )
 
-        # Add midnight cleanup job
         jq.run_daily(
-            callback=cleanup_old_data,
-            time=datetime.time(hour=0, minute=0, tzinfo=tz),
+            uh.check_debts,
+            time=dt_time(12, 0, tzinfo=tz),
+            days=(0, 2, 4),  # Monday, Wednesday, Friday
+            name="debt_check"
+        )
+
+
+        # Midnight cleanup
+        jq.run_daily(
+            cleanup_old_data,
+            time=dt_time(0, 0, tzinfo=tz),
             name="midnight_cleanup"
         )
 
-        logger.info("Bot is starting...")
-        # 7) Start polling (this is blocking and manages its own loop)
+        logger.info("Bot started, polling…")
         application.run_polling(
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True
         )
+
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.error(f"Fatal error: {e}", exc_info=True)
         raise
     finally:
-        # Clean up the lock file
-        cleanup_lock(instance_lock, os.path.join(tempfile.gettempdir(), 'lunch_bot.lock'))
+        cleanup_lock(lock_fd, os.path.join(tempfile.gettempdir(), "lunch_bot.lock"))
 
 if __name__ == "__main__":
     main()
