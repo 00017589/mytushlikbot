@@ -1,8 +1,9 @@
+# utils/__init__.py
+
 """
 Utility functions for the lunch bot.
 """
 
-from .food_utils import get_food_choices_for_date
 from sheets_utils import (
     get_worksheet,
     fetch_all_rows,
@@ -16,4 +17,4 @@ from validation_utils import (
     get_user_async,
     get_all_users_async,
     is_admin
-) 
+)
