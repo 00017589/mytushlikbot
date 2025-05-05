@@ -815,30 +815,45 @@ async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the notification message input"""
-    if update.message.text == BACK_BTN:
+    try:
+        if update.message.text == BACK_BTN:
+            await update.message.reply_text(
+                "Admin panel:",
+                reply_markup=get_admin_kb()
+            )
+            return ConversationHandler.END
+
+        # Store the message temporarily
+        context.user_data['notify_message'] = update.message.text
+
+        # Check message length
+        if len(update.message.text) > 4000:
+            await update.message.reply_text(
+                "❌ Xabar juda uzun. Iltimos, qisqaroq xabar yuboring.",
+                reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+            )
+            return
+
+        # Add confirmation step with proper keyboard
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Ha", callback_data="notify_confirm")],
+            [InlineKeyboardButton("Yo'q", callback_data="notify_cancel")]
+        ])
+
         await update.message.reply_text(
-            "Admin panel:",
+            f"⚠️ Quyidagi xabarni barcha foydalanuvchilarga yuborishni tasdiqlaysizmi?\n\n"
+            f"{update.message.text}",
+            reply_markup=keyboard
+        )
+        return S_NOTIFY_CONFIRM
+    except Exception as e:
+        logger.error(f"Error in handle_notify_message: {e}", exc_info=True)
+        await update.message.reply_text(
+            "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
             reply_markup=get_admin_kb()
         )
         return ConversationHandler.END
     
-    # Store the message temporarily
-    context.user_data['notify_message'] = update.message.text
-    
-    # Add confirmation step with proper keyboard
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Ha", callback_data="notify_confirm")],
-        [InlineKeyboardButton("Yo'q", callback_data="notify_cancel")]
-    ])
-    
-    await update.message.reply_text(
-        f"⚠️ Quyidagi xabarni barcha foydalanuvchilarga yuborishni tasdiqlaysizmi?\n\n"
-        f"{update.message.text}",
-        reply_markup=keyboard
-    )
-    return S_NOTIFY_CONFIRM
-
 async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
