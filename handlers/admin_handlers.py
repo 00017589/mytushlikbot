@@ -100,6 +100,14 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
 
     # If no admin exists yet, make this user the first admin
+    global users_col  # Ensure we're modifying the global variable
+    # Initialize users_col if it's None
+    if users_col is None:
+        users_col = await get_collection("users")
+    
+    tg_id = update.effective_user.id
+
+    # If no admin exists yet, make this user the first admin
     admin_exists = await users_col.count_documents({"is_admin": True}, limit=1) > 0
     if not admin_exists:
         # Upsert the user as admin
