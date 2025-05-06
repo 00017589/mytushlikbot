@@ -194,14 +194,12 @@ async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── 4) ADMIN PROMOTION / DEMOTION ─────────────────────────────────────────────
 
 async def start_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show list of non-admin users to promote."""
+    # get the message container (either query.message or update.message)
+    msg = update.callback_query.message if update.callback_query else update.message
+
     users = await users_col.find({"is_admin": False}).to_list(length=None)
     if not users:
-        await update.message.reply_text(
-            "Barcha foydalanuvchilar allaqachon admin!",
-            reply_markup=get_admin_kb()
-        )
-        return
+        return await msg.reply_text("Barcha foydalanuvchilar allaqachon admin!", reply_markup=get_admin_kb())
 
     keyboard = [
         [InlineKeyboardButton(u["name"], callback_data=f"add_admin:{u['telegram_id']}")]
@@ -209,7 +207,7 @@ async def start_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
 
-    await update.message.reply_text(
+    await msg.reply_text(
         "Admin qilmoqchi bo'lgan foydalanuvchini tanlang:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -236,25 +234,30 @@ async def add_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await start_add_admin(update, context)
 
 async def start_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show list of admin users to demote."""
-    users = await users_col.find({"is_admin": True}).to_list(length=None)
-    if not users:
-        await update.message.reply_text(
+    """Show list of admin users to demote, with a working back button."""
+    # Determine where to send replies
+    msg = update.callback_query.message if update.callback_query else update.message
+
+    # Fetch current admins
+    admins = await users_col.find({"is_admin": True}).to_list(length=None)
+    if not admins:
+        return await msg.reply_text(
             "Adminlar mavjud emas!",
             reply_markup=get_admin_kb()
         )
-        return
 
+    # Build inline keyboard
     keyboard = [
-        [InlineKeyboardButton(u["name"], callback_data=f"remove_admin:{u['telegram_id']}")]
-        for u in users
+        [InlineKeyboardButton(a["name"], callback_data=f"remove_admin:{a['telegram_id']}")]
+        for a in admins
     ]
     keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
 
-    await update.message.reply_text(
+    await msg.reply_text(
         "Adminlikdan olib tashlamoqchi bo'lgan foydalanuvchini tanlang:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
 
 # ─── Demote from admin ─────────────────────────────────────────────────────────
 async def remove_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -279,13 +282,16 @@ async def remove_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 async def start_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the daily price change flow"""
     logger.info("start_daily_price: Starting price change flow")
+
+    # pick the right message target
+    msg = update.callback_query.message if update.callback_query else update.message
+
     users = await users_col.find().to_list(length=None)
     if not users:
-        await update.message.reply_text(
+        return await msg.reply_text(
             "Hech qanday foydalanuvchi yo‘q.",
             reply_markup=get_admin_kb()
         )
-        return
 
     keyboard = [
         [
@@ -296,19 +302,14 @@ async def start_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         for u in users
     ]
-    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")])
+    # use a specific back callback
+    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_price_list")])
 
-    message_text = "Kunlik narxini o‘zgartirmoqchi bo‘lgan foydalanuvchini tanlang:"
+    text = "Kunlik narxini o‘zgartirmoqchi bo‘lgan foydalanuvchini tanlang:"
     if update.callback_query:
-        await update.callback_query.message.edit_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.message.reply_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ─── Price‑setting flow ────────────────────────────────────────────────────────
 async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -389,21 +390,25 @@ async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show list of users for deletion."""
+    # pick the right message object
+    msg = update.callback_query.message if update.callback_query else update.message
+
     users = await users_col.find().to_list(length=None)
     if not users:
-        await update.message.reply_text("Hech qanday foydalanuvchi yo‘q.", reply_markup=get_admin_kb())
-        return
+        return await msg.reply_text("Hech qanday foydalanuvchi yo‘q.", reply_markup=get_admin_kb())
 
     keyboard = [
         [InlineKeyboardButton(u["name"], callback_data=f"delete_user:{u['telegram_id']}")]
         for u in users
-    ] + [[InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")]]
+    ]
+    # use the same back callback as your other panels
+    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")])
 
     text = "O‘chirmoqchi bo‘lgan foydalanuvchini tanlang:"
     if update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ─── Delete a user ─────────────────────────────────────────────────────────────
@@ -1009,6 +1014,9 @@ def register_handlers(app):
     ]
     for text, handler in single_buttons:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(text)}$"), handler))
+
+    # in register_handlers(...)
+    app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
 
     # ─── 2.1) Inline callbacks for add/remove/delete admin & users ────────
     app.add_handler(CallbackQueryHandler(add_admin_callback,    pattern=r"^add_admin:\d+$"))
