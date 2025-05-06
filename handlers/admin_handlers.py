@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 from database import users_col, get_collection
-from sheets_utils import sync_balances_from_sheet, get_worksheet, update_user_balance_in_sheet
+from ..sheets_utils import sync_balances_from_sheet, get_worksheet, update_user_balance_in_sheet
 from utils import get_all_users_async, get_user_async, is_admin
 from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
