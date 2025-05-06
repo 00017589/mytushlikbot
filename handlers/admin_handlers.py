@@ -28,6 +28,7 @@ from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
 
 menu_col = None
+users_col = None
 logger = logging.getLogger(__name__)
 
 # ─── STATES ────────────────────────────────────────────────────────────────────
@@ -68,8 +69,9 @@ DEL_MENU2_BTN  = "2‑Menudan O‘chirish"
 # ─── ADMIN PANEL KEYBOARD ──────────────────────────────────────────────────────
 async def init_collections():
     """Initialize the `menu` collection and ensure menu1/menu2 exist."""
-    global menu_col
-    menu_col = await get_collection("menu")
+    global menu_col, users_col
+    menu_col  = await get_collection("menu")
+    users_col = await get_collection("users")
     for name in ("menu1", "menu2"):
         if not await menu_col.find_one({"name": name}):
             await menu_col.insert_one({"name": name, "items": []})
@@ -1048,7 +1050,7 @@ def register_handlers(app):
     ]
     for text, handler in single_buttons:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(text)}$"), handler))
-
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu))
     # in register_handlers(...)
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
 
@@ -1058,7 +1060,7 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(delete_user_callback,  pattern=r"^delete_user:\d+$"))
 
     # ─── 3) Menu management callbacks ────────────────────────────────────
-    menu_pattern = r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1|del_menu2|menu_back)$"
+    menu_pattern = r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1(:.+)?|del_menu2(:.+)?|menu_back)$"
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=menu_pattern))
     # And text handler for adding new menu items
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
