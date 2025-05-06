@@ -246,27 +246,37 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q    = update.callback_query;  await q.answer()
+    q    = update.callback_query
+    await q.answer()
     user = await get_user_async(q.from_user.id)
     data = q.data
 
-    # cancel back button
+    # 1) Cancel flow: replace inline menu with a normal reply keyboard
     if data == "cancel_attendance":
-        kb = get_default_kb(user.is_admin)
-        await q.message.edit_text("✅ Bekor qilindi.", reply_markup=kb)
+        # remove inline buttons
+        await q.message.edit_text("✅ Bekor qilindi.")
+        # send new message with reply keyboard
+        await q.message.reply_text(
+            "Nimani xohlaysiz?",
+            reply_markup=get_default_kb(user.is_admin)
+        )
         return
 
-    # actual food choice
-    food = data.split(":",1)[1]
+    # 2) Actual food choice
+    food = data.split(":", 1)[1]
     tz = pytz.timezone("Asia/Tashkent")
     today_str = datetime.now(tz).strftime("%Y-%m-%d")
-    await user.set_food_choice(today_str, food)
 
-    # now add them to attendance and deduct immediately
+    # Save choice and attendance in your model methods...
+    await user.set_food_choice(today_str, food)
     await user.add_attendance(today_str, food)
-    # give them the default menu with cancel option
-    kb = get_default_kb(user.is_admin, has_food_selection=True)
-    await q.message.edit_text(f"✅ {food} tanlandi!", reply_markup=kb)
+
+    # Remove inline menu and show confirmation with the reply keyboard
+    await q.message.edit_text(f"✅ {food} tanlandi!")
+    await q.message.reply_text(
+        f"Balansingiz: {user.balance:,} so‘m",
+        reply_markup=get_default_kb(user.is_admin)
+    )
 
 
 # ─── CANCEL LUNCH COMMAND ──────────────────────────────────────────────────────
