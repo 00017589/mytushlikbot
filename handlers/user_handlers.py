@@ -225,6 +225,9 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if today_str in user.declined_days:
         await user.remove_decline(today_str)
 
+    tz        = pytz.timezone("Asia/Tashkent")
+    today_wd  = datetime.now(tz).weekday()
+    menu_name = "menu1" if today_wd in (0,2,4) else "menu2"
     # show food options
     menu_col  = await get_collection("menu")
     doc       = await menu_col.find_one({"name": menu_name})
