@@ -136,6 +136,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         return await update.message.reply_text("Iltimos, avval /start bilan ro'yxatdan o'ting.")
 
+    await update.message.reply_text("⏳ Balans tekshirilmoqda...")
     # keep them aware:
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
     try:
