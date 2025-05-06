@@ -5,8 +5,6 @@ import os
 
 # Load environment variables from .env into os.environ
 load_dotenv()
-print("CONFIG: BOT_TOKEN =", os.getenv("BOT_TOKEN"))
-print("CONFIG: MONGODB_URI =", os.getenv("MONGODB_URI")[:30] + "…")
 
 # Retrieve the bot token and MongoDB URI by their variable names
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
