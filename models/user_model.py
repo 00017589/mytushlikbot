@@ -24,15 +24,16 @@ class User:
         _id: ObjectId = None,
         data: dict = None,
     ):
+        data = data or {}
         self._id = _id
-        self.telegram_id = telegram_id
-        self.name = name
-        self.phone = phone
-        self.balance = balance
-        self.daily_price = daily_price
-        self.attendance = attendance or []
-        self.transactions = transactions or []
-        self.is_admin = is_admin
+        self.telegram_id = data.get("telegram_id", telegram_id)
+        self.name = data.get("name", name)
+        self.phone = data.get("phone", phone)
+        self.balance = data.get("balance", balance)
+        self.daily_price = data.get("daily_price", daily_price)
+        self.attendance = data.get("attendance", attendance)
+        self.transactions = data.get("transactions", transactions)
+        self.is_admin = data.get("is_admin", is_admin)
         self.created_at = created_at or datetime.now(timezone.utc)
         self.declined_days = declined_days or []
         self.food_choices    = data.get("food_choices", {})
