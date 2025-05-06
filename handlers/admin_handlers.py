@@ -526,6 +526,7 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def show_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show current kassa amount from Google Sheets and save to DB."""
     try:
+        await update.message.reply_text("⌛️ Kassa tekshirilmoqda…")
         # 1) Fetch the worksheet
         worksheet = await get_worksheet()
         if not worksheet:
