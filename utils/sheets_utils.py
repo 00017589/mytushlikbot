@@ -58,6 +58,21 @@ async def fetch_all_rows():
     except Exception as e:
         logger.error(f"Error fetching rows: {str(e)}")
         return []
+    
+async def find_user_in_sheet(telegram_id: int):
+    """Find a user’s row in the sheet by Telegram ID."""
+    try:
+        worksheet = await get_worksheet()
+        if not worksheet:
+            return None
+        records = worksheet.get_all_records()
+        for rec in records:
+            if str(rec.get("Telegram ID")) == str(telegram_id):
+                return rec
+        return None
+    except Exception as e:
+        logger.error(f"Error finding user in sheet: {e}")
+        return None
 
 async def update_user_balance_in_sheet(telegram_id: int, new_balance: float) -> bool:
     """Update a user's balance in Google Sheets."""
