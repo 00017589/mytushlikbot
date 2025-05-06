@@ -21,7 +21,7 @@ from telegram.ext import (
     filters,
 )
 
-from database import users_col, get_collection
+from database import get_collection
 from utils.sheets_utils import sync_balances_from_sheet, get_worksheet, update_user_balance_in_sheet, find_user_in_sheet, sync_balances_incremental
 from utils import get_all_users_async, get_user_async, is_admin, get_default_kb
 from models.user_model import User
@@ -191,36 +191,44 @@ def format_users_list(users: list[User]) -> str:
     ]
     return "\n\n".join(lines)
 
+from telegram.constants import ParseMode
+from utils.sheets_utils import sync_balances_incremental
+
 async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user list from DB; incrementally sync balances from Sheets first."""
     try:
-        # 1) Fetch all users from Mongo (lightweight: only telegram_id & balance)
-        cursor = users_col.find({}, {"telegram_id": 1, "balance": 1, "name": 1, "daily_price": 1})
+        # 1) Fetch all users from Mongo (only the needed fields)
+        cursor = users_col.find(
+            {}, 
+            {"telegram_id": 1, "name": 1, "balance": 1, "daily_price": 1}
+        )
         mongo_users = await cursor.to_list(length=None)
 
-        # 2) Incremental sync: only update those whose sheet balance changed
-        #    sync_balances_incremental should return list of telegram_ids updated
-        updated_ids = await sync_balances_incremental()
+        # 2) Notify & perform incremental balance sync
+        await update.message.reply_text("⏳ Balanslar yangilanmoqda…")
+        updated_count = await sync_balances_incremental()
 
-        # 3) If any were updated, re-fetch those to get fresh balances
-        if updated_ids:
-            refreshed = await users_col.find(
-                {"telegram_id": {"$in": updated_ids}}
+        # 3) If any balances changed, re-fetch those users for fresh data
+        if updated_count:
+            changed_users = await users_col.find(
+                {"telegram_id": {"$in": [u["telegram_id"] for u in mongo_users]}},
+                {"telegram_id": 1, "balance": 1}
             ).to_list(length=None)
-            # replace entries in mongo_users
-            by_id = {u["telegram_id"]: u for u in refreshed}
+            balance_map = {u["telegram_id"]: u["balance"] for u in changed_users}
             for u in mongo_users:
-                if u["telegram_id"] in by_id:
-                    u["balance"] = by_id[u["telegram_id"]]["balance"]
+                if u["telegram_id"] in balance_map:
+                    u["balance"] = balance_map[u["telegram_id"]]
 
-        # 4) Format and send
-        lines = []
-        for u in mongo_users:
-            lines.append(
+        # 4) Build and send the formatted list
+        if mongo_users:
+            lines = [
                 f"• *{u['name']}* `(ID: {u['telegram_id']})`\n"
                 f"   💰 Balans: *{u['balance']:,}* so‘m | 📝 Narx: *{u.get('daily_price', 0):,}* so‘m"
-            )
-        text = "\n\n".join(lines) if lines else "Hech qanday foydalanuvchi yo‘q."
+                for u in mongo_users
+            ]
+            text = "\n\n".join(lines)
+        else:
+            text = "Hech qanday foydalanuvchi yo‘q."
 
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
         # 5) Return to admin panel
@@ -231,6 +239,7 @@ async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ Xatolik yuz berdi.", reply_markup=get_admin_kb()
         )
+
     return ConversationHandler.END
 
 
