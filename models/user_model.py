@@ -192,3 +192,13 @@ class User:
         self.is_admin = False
         self._record_txn("admin", 0, "Demoted from admin")
         await self.save()
+    async def set_food_choice(self, date: str, food: str):
+        # save into MongoDB daily_food_choices collection
+        col = await get_collection("daily_food_choices")
+        await col.update_one(
+            {"telegram_id": self.telegram_id, "date": date},
+            {"$set": {"food_choice": food, "user_name": self.name}},
+            upsert=True
+        )
+        # also keep it in the in‑memory object if you want
+        self.food_choices[date] = food
