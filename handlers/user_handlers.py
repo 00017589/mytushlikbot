@@ -136,19 +136,15 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     user  = await get_user_async(tg_id)
     if not user:
-        return await update.message.reply_text(
-            "Iltimos, avval /start bilan ro'yxatdan o'ting."
-        )
+        return await update.message.reply_text("Iltimos, avval /start bilan ro'yxatdan o'ting.")
 
-    # Try to sync from the Google Sheet if there’s a record
     try:
         sheet_record = await find_user_in_sheet(tg_id)
         if sheet_record and 'Balance' in sheet_record:
             bal = float(str(sheet_record['Balance']).replace(',', ''))
             if bal != user.balance:
-                # Fetch the collection at runtime
-                users_col = await get_collection("users")
-                await users_col.update_one(
+                users = await get_collection("users")             # ← use get_collection
+                await users.update_one(
                     {"telegram_id": tg_id},
                     {"$set": {"balance": bal}}
                 )
@@ -157,7 +153,6 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error fetching balance from sheet: {e}")
 
     await update.message.reply_text(f"Balansingiz: {user.balance:,.0f} so'm.")
-
 
 async def attendance_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
