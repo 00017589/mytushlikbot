@@ -928,59 +928,60 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 9) NOTIFY ALL ─────────────────────────────────────────────────────────────
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the notification process"""
+    """Start the broadcast flow (admin only)."""
     caller = await get_user_async(update.effective_user.id)
-    if not caller or not caller.is_admin:
+    if not (caller and caller.is_admin):
         await update.message.reply_text("❌ Siz admin emassiz.")
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "⚠️ Barcha foydalanuvchilarga yubormoqchi bo'lgan xabarni kiriting:",
+        "⚠️ Yuboriladigan xabarni kiriting yoki Ortga bosing:",
         reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
     )
     return S_NOTIFY_MESSAGE
 
 async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receive the broadcast text and ask for confirmation"""
     text = update.message.text
     if text == BACK_BTN:
         await update.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return ConversationHandler.END
 
-    context.user_data['notify_message'] = text
-
     if len(text) > 4000:
         await update.message.reply_text(
-            "❌ Xabar juda uzun. Iltimos, qisqaroq matn kiriting.",
+            "❌ Xabar juda uzun. Iltimos, 4000 belgidan kamroq matn kiriting.",
             reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
         )
         return S_NOTIFY_MESSAGE
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Ha, tasdiqlayman", callback_data="notify_confirm")],
-        [InlineKeyboardButton("Bekor qilish", callback_data="notify_cancel")]
+    context.user_data['notify_message'] = text
+
+    # Confirmation buttons
+    confirm_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Ha, yubor", callback_data="notify_confirm")],
+        [InlineKeyboardButton("❌ Bekor qil", callback_data="notify_cancel")],
     ])
     await update.message.reply_text(
-        f"⚠️ Quyidagi xabarni yuborishni tasdiqlaysizmi?\n\n{text}",
-        reply_markup=keyboard
+        f"⚠️ Quyidagichani yuborishga rozimisiz?\n\n{text}",
+        reply_markup=confirm_kb
     )
     return S_NOTIFY_CONFIRM
 
 async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send the broadcast if confirmed, or cancel"""
     query = update.callback_query
     await query.answer()
 
     if query.data == "notify_cancel":
+        # Cancel and back to panel
         await query.message.edit_text("❌ Xabar yuborish bekor qilindi.")
         await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return ConversationHandler.END
 
-    # Send to all non-admin users
+    # Otherwise it's "notify_confirm"
     message = context.user_data.get('notify_message', '')
     users = await get_all_users_async()
+
+    await query.message.edit_text("⏳ Xabar yuborilmoqda…")
     sent, failed = 0, []
-    await query.message.edit_text("⏳ Xabar yuborilmoqda...")
 
     for u in users:
         if u.is_admin:
@@ -988,17 +989,14 @@ async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         try:
             await context.bot.send_message(u.telegram_id, message)
             sent += 1
-        except:
+        except Exception:
             failed.append(u.telegram_id)
 
-    result = f"✅ {sent}/{len(users)} foydalanuvchiga yuborildi."
+    summary = f"✅ {sent}/{len(users)} foydalanuvchiga yuborildi."
     if failed:
-        result += f"\n❌ {len(failed)} kishiga yuborilmadi."
-    await query.message.edit_text(result)
+        summary += f"\n⚠️ {len(failed)} kishi ololmadi."
 
-    # Optionally schedule a summary later...
-    # (omitted for brevity)
-
+    await query.message.edit_text(summary)
     await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
     return ConversationHandler.END
 
@@ -1205,31 +1203,21 @@ def register_handlers(app):
     for p in price_patterns:
         app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=p))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price))
-
-    # ─── 7) Broadcast (/notify_all) conversation ─────────────────────────
+    # ─── 7) Notify all conversation ───────────────────────────────────────
     notify_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("notify_all", notify_all),
-            MessageHandler(filters.Regex(r"^/notify_all$"), notify_all),
-        ],
+        entry_points=[MessageHandler(filters.Regex(f"^{notify_all.__doc__.split()[0]}$"), notify_all),
+                    CommandHandler("notify_all", notify_all)],
         states={
-            S_NOTIFY_MESSAGE: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"),
-                    handle_notify_message
-                )
-            ],
-            S_NOTIFY_CONFIRM: [
-                CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
-            ],
+            S_NOTIFY_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)],
+            S_NOTIFY_CONFIRM: [CallbackQueryHandler(notify_confirm_callback, pattern="^notify_(confirm|cancel)$")],
         },
         fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
+            MessageHandler(filters.Regex(f"^{BACK_BTN}$"), lambda u,c: (c.bot.send_message(u.effective_chat.id, "🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb()), ConversationHandler.END)[1]),
+            CommandHandler("cancel", lambda u,c: (c.bot.send_message(u.effective_chat.id, "🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb()), ConversationHandler.END)[1]),
         ],
         allow_reentry=True,
         per_message=True,
-        name="notify_conversation"
+        name="notify_conversation",
     )
     app.add_handler(notify_conv)
 
