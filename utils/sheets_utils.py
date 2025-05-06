@@ -6,7 +6,7 @@ import asyncio
 import pymongo
 from google.oauth2.service_account import Credentials
 from functools import wraps
-from database import users_col
+from database import users_col, get_collection
 
 logger = logging.getLogger(__name__)
 
@@ -82,35 +82,38 @@ async def sync_balances_from_sheet(context=None) -> dict:
             errors += 1
     return {"success": True, "updated": updated, "errors": errors}
 
-async def sync_balances_incremental() -> int:
-    """
-    Efficient: pull DB snapshot, pull sheet once, bulk‐write only diffs.
-    Returns number of changed balances.
-    """
-    # 1) DB snapshot
-    db_users = await users_col.find({}, {"telegram_id": 1, "balance": 1}).to_list(None)
+# in utils/sheets_utils.py
+
+async def sync_balances_incremental():
+    # 1) Get the Mongo collection
+    users_collection = await get_collection("users")
+
+    # 2) Snapshot all DB users
+    db_users = await users_collection.find(
+        {}, {"telegram_id": 1, "balance": 1}
+    ).to_list(length=None)
+
     db_map = {u["telegram_id"]: u["balance"] for u in db_users}
 
-    # 2) Sheet snapshot
-    ws = await get_worksheet()
-    rows = ws.get_all_records()
+    # 3) Fetch sheet rows
+    worksheet = await get_worksheet()
+    rows = worksheet.get_all_records()
 
-    # 3) Diffs
-    ops = []
+    # 4) Build deltas
+    updates = []
     for row in rows:
-        try:
-            tid = int(row["Telegram ID"])
-            bal_sheet = float(str(row.get("Balance", 0)).replace(",", ""))
-            if tid in db_map and db_map[tid] != bal_sheet:
-                ops.append(pymongo.UpdateOne(
-                    {"telegram_id": tid},
-                    {"$set": {"balance": bal_sheet}}
-                ))
-        except Exception:
-            continue
+        tg_id = int(row["Telegram ID"])
+        bal_sheet = float(str(row["Balance"]).replace(",", ""))
+        bal_db = db_map.get(tg_id)
+        if bal_db is not None and bal_db != bal_sheet:
+            updates.append((tg_id, bal_sheet))
 
-    # 4) Bulk
-    if ops:
-        result = await users_col.bulk_write(ops)
-        return len(ops)
-    return 0
+    # 5) Bulk write
+    if updates:
+        ops = [
+            pymongo.UpdateOne({"telegram_id": tg}, {"$set": {"balance": bal}})
+            for tg, bal in updates
+        ]
+        await users_collection.bulk_write(ops)
+
+    return [tg for tg, _ in updates]
