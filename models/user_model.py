@@ -19,7 +19,7 @@ class User:
         attendance: list = None,
         transactions: list = None,
         is_admin: bool = False,
-        created_at: datetime.datetime = None,
+        created_at: datetime = None,
         declined_days: list = None,
         _id: ObjectId = None,
         data: dict = None,
@@ -33,7 +33,7 @@ class User:
         self.attendance = attendance or []
         self.transactions = transactions or []
         self.is_admin = is_admin
-        self.created_at = created_at or datetime.datetime.utcnow()
+        self.created_at = created_at or datetime.now(timezone.utc)
         self.declined_days = declined_days or []
         self.food_choices    = data.get("food_choices", {})
 
@@ -54,7 +54,7 @@ class User:
             "transactions": [],
             "is_admin": False,
             "declined_days": [],
-            "created_at": datetime.datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         await users_col.insert_one(doc)
         return cls(**doc)
@@ -90,7 +90,7 @@ class User:
         )
 
     def _record_txn(self, txn_type: str, amount: int, desc: str):
-        now_iso = datetime.datetime.utcnow().isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         self.transactions.append({
             "type": txn_type,
             "amount": amount,
@@ -166,7 +166,7 @@ class User:
     @staticmethod
     async def cleanup_old_food_choices():
         tz = pytz.timezone("Asia/Tashkent")
-        today = datetime.datetime.now(tz).strftime("%Y-%m-%d")
+        today = datetime.now(tz).strftime("%Y-%m-%d")
         col = await get_collection("daily_food_choices")
         await col.delete_many({"date": {"$lt": today}})
 
