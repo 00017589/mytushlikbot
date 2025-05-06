@@ -199,25 +199,26 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q    = update.callback_query;  await q.answer()
-    user = await get_user_async(q.from_user.id)
-    tz   = pytz.timezone("Asia/Tashkent")
-    today_str = datetime.now(tz).strftime("%Y-%m-%d")
+    q        = update.callback_query
+    await q.answer()
+    user     = await get_user_async(q.from_user.id)
+    tz       = pytz.timezone("Asia/Tashkent")
+    today_dt = datetime.now(tz)
+    today_str = today_dt.strftime("%Y-%m-%d")
 
+    # If they clicked “No”
     if q.data == NO:
-        # they decline
         if today_str in user.attendance:
             await user.remove_attendance(today_str)
         await user.decline_attendance(today_str)
 
-        # back to default keyboard
+        # Back to default keyboard
         kb = get_default_kb(user.is_admin)
         await q.message.edit_text("❌ Bugungi tushlik rad etildi.", reply_markup=kb)
         return
 
-    # YES branch
+    # If they already said “Yes” earlier
     if today_str in user.attendance:
-        # already joined
         kb = get_default_kb(user.is_admin, has_food_selection=False)
         await q.message.edit_text(
             f"⚠️ Allaqachon ro'yxatdasiz. Balans: {user.balance:,.0f} so'm.",
@@ -225,17 +226,20 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # clear any declines, prompt food
+    # Clear any prior decline
     if today_str in user.declined_days:
         await user.remove_decline(today_str)
 
-    items = (await get_collection("menu")).find_one(
-        {"name": "menu1" if datetime.now(tz).weekday() in (0,2,4) else "menu2"}
-    )
-    foods = items.get("items", [])
+    # Prompt food selection
+    menu_col = await get_collection("menu")
+    menu_name = "menu1" if today_dt.weekday() in (0, 2, 4) else "menu2"
+    doc       = await menu_col.find_one({"name": menu_name})
+    foods     = doc.get("items", [])
+
     kb = [[InlineKeyboardButton(f, callback_data=f"food:{f}")] for f in foods]
     kb.append([InlineKeyboardButton("🔙 Ortga", callback_data="cancel_attendance")])
     await q.message.edit_text("🍽 Iltimos, taom tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+
 
 
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
