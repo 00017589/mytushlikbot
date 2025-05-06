@@ -5,6 +5,7 @@ import re
 from datetime import datetime, time as dt_time
 import pytz
 
+from telegram.constants import ParseMode
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -33,6 +34,7 @@ from utils import (
 )
 from config import DEFAULT_DAILY_PRICE
 from utils.sheets_utils import find_user_in_sheet
+from handlers.admin_handlers import admin_panel
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +172,18 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     text  = "To'lovlar tarixi:\n" + "\n".join(lines) if lines else "Hech qanday tranzaksiya yo'q."
     await update.message.reply_text(text)
 
+# ─── CARD INFO HANDLER ─────────────────────────────────────────────────────────
+async def show_card_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fetch and display the stored card number & owner from MongoDB."""
+    card_col = await get_collection("card_details")
+    doc = await card_col.find_one({})
+    if not doc:
+        return await update.message.reply_text("❌ Karta ma'lumotlari topilmadi.")
+    await update.message.reply_text(
+        f"💳 *Karta raqami:* `{doc['card_number']}`\n"
+        f"👤 *Karta egasi:* {doc['card_owner']}",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # ─── MENU & FOOD SELECTION ────────────────────────────────────────────────────
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,6 +315,11 @@ async def check_debts(context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Error sending debt notification to {u.telegram_id}: {e}")
 
 
+# ─── Admin entry via button ───────────────────────────────────────────────────
+async def admin_button_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # simply delegate to your existing admin_panel handler
+    await admin_panel(update, context)
+
 # ─── REGISTER HANDLERS ────────────────────────────────────────────────────────
 def register_handlers(app):
     # registration
@@ -336,8 +355,9 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(BAL_BTN)}$"), balance))
     app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(NAME_BTN)}$"), change_name_start))
     app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(CXL_BTN)}$"), cancel_lunch))
-    app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(CARD_BTN)}$"),
-        lambda u,c: c.bot.send_message(u.effective_user.id, "Karta raqami...")))
+    app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(CARD_BTN)}$"), show_card_info))
+    app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(ADMIN_BTN)}$"), admin_panel))
+    lambda u,c: c.bot.send_message(u.effective_user.id, "Karta raqami...")
 
     # inline callbacks
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{YES}$"))
