@@ -183,25 +183,47 @@ def format_users_list(users: list[User]) -> str:
     return "\n\n".join(lines)
 
 async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sync only changed balances, then show the up‑to‑date user list."""
+    """Show user list from DB; incrementally sync balances from Sheets first."""
     try:
-        # 1) Incrementally sync balances from Sheets
-        changed = await sync_balances_incremental()
-        logger.info(f"Synced balances for {changed} users")
+        # 1) Fetch all users from Mongo (lightweight: only telegram_id & balance)
+        cursor = users_col.find({}, {"telegram_id": 1, "balance": 1, "name": 1, "daily_price": 1})
+        mongo_users = await cursor.to_list(length=None)
+
+        # 2) Incremental sync: only update those whose sheet balance changed
+        #    sync_balances_incremental should return list of telegram_ids updated
+        updated_ids = await sync_balances_incremental(mongo_users)
+
+        # 3) If any were updated, re-fetch those to get fresh balances
+        if updated_ids:
+            refreshed = await users_col.find(
+                {"telegram_id": {"$in": updated_ids}}
+            ).to_list(length=None)
+            # replace entries in mongo_users
+            by_id = {u["telegram_id"]: u for u in refreshed}
+            for u in mongo_users:
+                if u["telegram_id"] in by_id:
+                    u["balance"] = by_id[u["telegram_id"]]["balance"]
+
+        # 4) Format and send
+        lines = []
+        for u in mongo_users:
+            lines.append(
+                f"• *{u['name']}* `(ID: {u['telegram_id']})`\n"
+                f"   💰 Balans: *{u['balance']:,}* so‘m | 📝 Narx: *{u.get('daily_price', 0):,}* so‘m"
+            )
+        text = "\n\n".join(lines) if lines else "Hech qanday foydalanuvchi yo‘q."
+
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        # 5) Return to admin panel
+        await update.message.reply_text("Admin panel:", reply_markup=get_admin_kb())
+
     except Exception as e:
-        logger.warning(f"Incremental balance sync failed: {e}")
-
-    # 2) Fetch fresh users from DB
-    users = await get_all_users_async()
-
-    # 3) Format and send
-    await update.message.reply_text(
-        format_users_list(users),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    # 4) Return to admin panel
-    await update.message.reply_text("🔧 Admin panelga qaytdingiz:", reply_markup=get_admin_kb())
+        logger.error(f"Error in list_users_exec: {e}", exc_info=True)
+        await update.message.reply_text(
+            "❌ Xatolik yuz berdi.", reply_markup=get_admin_kb()
+        )
     return ConversationHandler.END
+
 
 # ─── 4) ADMIN PROMOTION / DEMOTION ─────────────────────────────────────────────
 
