@@ -445,7 +445,6 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Clean up
     await (await get_collection("daily_food_choices")).delete_many({"telegram_id": user_id})
-    await (await get_collection("test_food_choices")).delete_many({"telegram_id": user_id})
     await users_col.delete_one({"telegram_id": user_id})
 
     # Confirm deletion
