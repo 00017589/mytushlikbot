@@ -142,8 +142,8 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         sheet_record = await find_user_in_sheet(tg_id)
-        if sheet_record and "Balance" in sheet_record:
-            bal = float(str(sheet_record["Balance"]).replace(",", ""))
+        if sheet_record and "balance" in sheet_record:
+            bal = float(str(sheet_record["balance"]).replace(",", ""))
             if bal != user.balance:
                 # Use get_collection here to ensure we have a valid collection object
                 users = await get_collection("users")
