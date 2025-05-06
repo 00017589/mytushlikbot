@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 from database import users_col, get_collection
-from utils.sheets_utils import sync_balances_from_sheet, get_worksheet, update_user_balance_in_sheet, find_user_in_sheet
+from utils.sheets_utils import sync_balances_from_sheet, get_worksheet, update_user_balance_in_sheet, find_user_in_sheet, sync_balances_incremental
 from utils import get_all_users_async, get_user_async, is_admin, get_default_kb
 from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
@@ -176,19 +176,24 @@ def format_users_list(users: list[User]) -> str:
     return "\n\n".join(lines)
 
 async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user list from DB; optional on‑demand sync."""
+    """Sync only changed balances, then show the up‑to‑date user list."""
     try:
-        users = await get_all_users_async()
-        await update.message.reply_text(
-            format_users_list(users),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        # Return to admin panel
-        await update.message.reply_text("Admin panel:", reply_markup=get_admin_kb())
-    except Exception:
-        await update.message.reply_text(
-            "❌ Xatolik yuz berdi.", reply_markup=get_admin_kb()
-        )
+        # 1) Incrementally sync balances from Sheets
+        changed = await sync_balances_incremental()
+        logger.info(f"Synced balances for {changed} users")
+    except Exception as e:
+        logger.warning(f"Incremental balance sync failed: {e}")
+
+    # 2) Fetch fresh users from DB
+    users = await get_all_users_async()
+
+    # 3) Format and send
+    await update.message.reply_text(
+        format_users_list(users),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    # 4) Return to admin panel
+    await update.message.reply_text("🔧 Admin panelga qaytdingiz:", reply_markup=get_admin_kb())
     return ConversationHandler.END
 
 # ─── 4) ADMIN PROMOTION / DEMOTION ─────────────────────────────────────────────
