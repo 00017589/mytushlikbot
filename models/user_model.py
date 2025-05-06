@@ -22,6 +22,7 @@ class User:
         created_at: datetime.datetime = None,
         declined_days: list = None,
         _id: ObjectId = None,
+        data: dict = None,
     ):
         self._id = _id
         self.telegram_id = telegram_id
@@ -34,6 +35,7 @@ class User:
         self.is_admin = is_admin
         self.created_at = created_at or datetime.datetime.utcnow()
         self.declined_days = declined_days or []
+        self.food_choices    = data.get("food_choices", {})
 
     @classmethod
     async def create(cls, telegram_id, name, phone):
