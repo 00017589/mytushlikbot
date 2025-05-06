@@ -5,6 +5,8 @@ import logging
 from google.oauth2.service_account import Credentials
 from functools import wraps
 import asyncio
+import pymongo
+from database import users_col
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -149,3 +151,38 @@ async def sync_balances_from_sheet(context=None) -> dict:
     except Exception as e:
         logger.error(f"Error syncing from sheet: {str(e)}")
         return {"success": False, "error": str(e)}
+
+async def sync_balances_incremental():
+    """
+    Fetch all users’ balances from Google Sheets once,
+    compare to Mongo, and update only those that differ.
+    """
+    # 1) Snapshot of all DB users
+    db_users = await users_col.find({}, {"telegram_id": 1, "balance": 1}).to_list(length=None)
+    db_map   = {u["telegram_id"]: u["balance"] for u in db_users}
+
+    # 2) Fetch every sheet row (one call)
+    worksheet = await get_worksheet()
+    rows      = worksheet.get_all_records()   # synchronous; it’s all in memory
+
+    # 3) Build list of deltas
+    updates = []
+    for row in rows:
+        tg_id     = int(row["TelegramID"])
+        bal_sheet = float(str(row["Balance"]).replace(",", ""))
+        bal_db    = db_map.get(tg_id)
+        if bal_db is not None and bal_db != bal_sheet:
+            updates.append((tg_id, bal_sheet))
+
+    # 4) Bulk write only those that changed
+    if updates:
+        ops = [
+            pymongo.UpdateOne(
+                {"telegram_id": tg},
+                {"$set": {"balance": bal}}
+            )
+            for tg, bal in updates
+        ]
+        await users_col.bulk_write(ops)
+
+    return len(updates)
