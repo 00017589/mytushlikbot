@@ -193,7 +193,7 @@ async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 2) Incremental sync: only update those whose sheet balance changed
         #    sync_balances_incremental should return list of telegram_ids updated
-        updated_ids = await sync_balances_incremental(mongo_users)
+        updated_ids = await sync_balances_incremental()
 
         # 3) If any were updated, re-fetch those to get fresh balances
         if updated_ids:
@@ -241,7 +241,7 @@ async def start_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(u["name"], callback_data=f"add_admin:{u['telegram_id']}")]
         for u in users
     ]
-    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
+    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_admin")])
 
     await msg.reply_text(
         "Admin qilmoqchi bo'lgan foydalanuvchini tanlang:",
@@ -287,7 +287,7 @@ async def start_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton(a["name"], callback_data=f"remove_admin:{a['telegram_id']}")]
         for a in admins
     ]
-    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
+    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_admin")])
 
     await msg.reply_text(
         "Adminlikdan olib tashlamoqchi bo'lgan foydalanuvchini tanlang:",
@@ -395,7 +395,7 @@ async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["pending_price_user"] = uid
         await query.message.edit_text(
             f"{user['name']} uchun narxni kiriting (raqam):",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_menu")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_admin")]])
         )
         return
 
@@ -438,7 +438,7 @@ async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for u in users
     ]
     # use the same back callback as your other panels
-    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")])
+    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")])
 
     text = "O‘chirmoqchi bo‘lgan foydalanuvchini tanlang:"
     if update.callback_query:
@@ -1033,6 +1033,9 @@ def register_handlers(app):
 
     # ─── 1) Plain commands & entry points ────────────────────────────────
     app.add_handler(CommandHandler("admin", admin_panel))
+    # right after app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(
+    CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
     app.add_handler(CommandHandler("notify_all", notify_all))
 
     # ─── 2) Single‑step buttons from admin keyboard ──────────────────────
