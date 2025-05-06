@@ -146,7 +146,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 2) BACK TO MAIN MENU ───────────────────────────────────────────────────────
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Return to the main menu with the correct keyboard."""
+    """Return to the main menu with the correct reply keyboard."""
+    from utils import get_default_kb
 
     tg_id = update.effective_user.id
     user = await users_col.find_one({"telegram_id": tg_id})
@@ -156,7 +157,13 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.message.edit_text(text, reply_markup=kb)
+        # 1) delete the old inline‐keyboard message
+        try:
+            await update.callback_query.message.delete()
+        except BadRequest:
+            pass
+        # 2) send a fresh message with the reply keyboard
+        await update.effective_chat.send_message(text, reply_markup=kb)
     else:
         await update.message.reply_text(text, reply_markup=kb)
 
