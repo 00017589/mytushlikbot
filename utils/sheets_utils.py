@@ -2,16 +2,14 @@ import os
 import json
 import gspread
 import logging
-from google.oauth2.service_account import Credentials
-from functools import wraps
 import asyncio
 import pymongo
+from google.oauth2.service_account import Credentials
+from functools import wraps
 from database import users_col
 
-# Initialize logger
 logger = logging.getLogger(__name__)
 
-# Google Sheets setup
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
@@ -20,169 +18,99 @@ SHEET_NAME = 'tushlik'
 WORKSHEET_NAME = 'Sheet1'
 
 def get_creds():
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise RuntimeError("GOOGLE_CREDENTIALS_JSON environment variable not set!")
+    creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
     creds_dict = json.loads(creds_json)
     return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
 def to_async(func):
     @wraps(func)
-    async def run(*args, loop=None, executor=None, **kwargs):
-        if loop is None:
-            loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
-    return run
+    async def wrapper(*args, **kwargs):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+    return wrapper
 
 @to_async
-def get_worksheet():
-    """Get the worksheet object. Now async-compatible."""
-    try:
-        creds = get_creds()
-        gc = gspread.authorize(creds)
-        sh = gc.open(SHEET_NAME)
-        worksheet = sh.worksheet(WORKSHEET_NAME)
-        return worksheet
-    except Exception as e:
-        logger.error(f"Unexpected error getting worksheet: {repr(e)} (type: {type(e)})")
-        # If it's a Response object, print more details
-        if hasattr(e, 'status_code'):
-            logger.error(f"Response status: {e.status_code}, content: {getattr(e, 'content', '')}")
-        return None
+def _open_worksheet():
+    gc = gspread.authorize(get_creds())
+    sh = gc.open(SHEET_NAME)
+    return sh.worksheet(WORKSHEET_NAME)
 
-async def fetch_all_rows():
-    """Fetch all rows from the worksheet. Now async-compatible."""
-    worksheet = await get_worksheet()
-    if not worksheet:
-        return []
-    try:
-        return worksheet.get_all_records()
-    except Exception as e:
-        logger.error(f"Error fetching rows: {str(e)}")
-        return []
-    
-async def find_user_in_sheet(telegram_id: int):
-    """Find a user’s row in the sheet by Telegram ID."""
-    try:
-        worksheet = await get_worksheet()
-        if not worksheet:
-            return None
-        records = worksheet.get_all_records()
-        for rec in records:
-            if str(rec.get("Telegram ID")) == str(telegram_id):
-                return rec
+async def get_worksheet():
+    return await _open_worksheet()
+
+async def find_user_in_sheet(telegram_id: int) -> dict | None:
+    ws = await get_worksheet()
+    if not ws:
         return None
-    except Exception as e:
-        logger.error(f"Error finding user in sheet: {e}")
-        return None
+    for rec in ws.get_all_records():
+        if str(rec.get("Telegram ID")) == str(telegram_id):
+            return rec
+    return None
 
 async def update_user_balance_in_sheet(telegram_id: int, new_balance: float) -> bool:
-    """Update a user's balance in Google Sheets."""
-    try:
-        worksheet = await get_worksheet()
-        if not worksheet:
-            return False
-
-        # Find and update the user's row
-        cell = worksheet.find(str(telegram_id))
-        if cell:
-            row = cell.row
-            worksheet.update_cell(row, 4, new_balance)  # Column D is balance
-            return True
+    ws = await get_worksheet()
+    if not ws:
         return False
-    except Exception as e:
-        logger.error(f"Error updating balance in sheet: {str(e)}")
+    try:
+        cell = ws.find(str(telegram_id))
+        ws.update_cell(cell.row, 4, new_balance)
+        return True
+    except Exception:
         return False
 
 async def sync_balances_from_sheet(context=None) -> dict:
-    """Sync all balances from Google Sheets to database."""
-    try:
-        worksheet = await get_worksheet()
-        if not worksheet:
-            return {"success": False, "error": "Failed to get worksheet"}
-
-        data = worksheet.get_all_records()
-        updated = 0
-        errors = 0
-
-        for row in data:
-            try:
-                # Skip rows with missing or invalid Telegram ID
-                telegram_id = row.get('Telegram ID')
-                if not telegram_id:
-                    continue
-                
-                try:
-                    telegram_id = int(telegram_id)
-                except (ValueError, TypeError):
-                    continue
-
-                # Handle balance with proper error checking
-                balance_str = row.get('Balance')
-                if balance_str is None:
-                    balance = 0
-                else:
-                    try:
-                        # Remove any spaces and commas
-                        balance_str = str(balance_str).replace(' ', '').replace(',', '')
-                        balance = float(balance_str)
-                    except (ValueError, TypeError):
-                        balance = 0
-                
-                # Update in database
-                from database import users_col
-                result = await users_col.update_one(
-                    {"telegram_id": telegram_id},
-                    {"$set": {"balance": balance}}
-                )
-                
-                if result.modified_count > 0:
-                    updated += 1
-                else:
-                    errors += 1
-            except Exception as e:
-                errors += 1
-                logger.error(f"Error updating user from sheet: {str(e)}")
-        return {
-            "success": True,
-            "updated": updated,
-            "errors": errors
-        }
-    except Exception as e:
-        logger.error(f"Error syncing from sheet: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-async def sync_balances_incremental():
     """
-    Fetch all users’ balances from Google Sheets once,
-    compare to Mongo, and update only those that differ.
+    Naïve full sync: fetch every row, update each in Mongo.
     """
-    # 1) Snapshot of all DB users
-    db_users = await users_col.find({}, {"telegram_id": 1, "balance": 1}).to_list(length=None)
-    db_map   = {u["telegram_id"]: u["balance"] for u in db_users}
-
-    # 2) Fetch every sheet row (one call)
-    worksheet = await get_worksheet()
-    rows      = worksheet.get_all_records()   # synchronous; it’s all in memory
-
-    # 3) Build list of deltas
-    updates = []
-    for row in rows:
-        tg_id     = int(row["TelegramID"])
-        bal_sheet = float(str(row["Balance"]).replace(",", ""))
-        bal_db    = db_map.get(tg_id)
-        if bal_db is not None and bal_db != bal_sheet:
-            updates.append((tg_id, bal_sheet))
-
-    # 4) Bulk write only those that changed
-    if updates:
-        ops = [
-            pymongo.UpdateOne(
-                {"telegram_id": tg},
+    ws = await get_worksheet()
+    if not ws:
+        return {"success": False, "error": "no worksheet"}
+    updated = errors = 0
+    for row in ws.get_all_records():
+        tid = row.get("Telegram ID")
+        try:
+            tid = int(tid)
+            bal = float(str(row.get("Balance", 0)).replace(",", ""))
+            res = await users_col.update_one(
+                {"telegram_id": tid},
                 {"$set": {"balance": bal}}
             )
-            for tg, bal in updates
-        ]
-        await users_col.bulk_write(ops)
+            if res.modified_count:
+                updated += 1
+        except Exception as e:
+            logger.error("sheet sync err %s", e)
+            errors += 1
+    return {"success": True, "updated": updated, "errors": errors}
 
-    return len(updates)
+async def sync_balances_incremental() -> int:
+    """
+    Efficient: pull DB snapshot, pull sheet once, bulk‐write only diffs.
+    Returns number of changed balances.
+    """
+    # 1) DB snapshot
+    db_users = await users_col.find({}, {"telegram_id": 1, "balance": 1}).to_list(None)
+    db_map = {u["telegram_id"]: u["balance"] for u in db_users}
+
+    # 2) Sheet snapshot
+    ws = await get_worksheet()
+    rows = ws.get_all_records()
+
+    # 3) Diffs
+    ops = []
+    for row in rows:
+        try:
+            tid = int(row["Telegram ID"])
+            bal_sheet = float(str(row.get("Balance", 0)).replace(",", ""))
+            if tid in db_map and db_map[tid] != bal_sheet:
+                ops.append(pymongo.UpdateOne(
+                    {"telegram_id": tid},
+                    {"$set": {"balance": bal_sheet}}
+                ))
+        except Exception:
+            continue
+
+    # 4) Bulk
+    if ops:
+        result = await users_col.bulk_write(ops)
+        return len(ops)
+    return 0
