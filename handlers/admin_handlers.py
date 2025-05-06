@@ -23,7 +23,7 @@ from telegram.ext import (
 
 from database import users_col, get_collection
 from utils.sheets_utils import sync_balances_from_sheet, get_worksheet, update_user_balance_in_sheet, find_user_in_sheet
-from utils import get_all_users_async, get_user_async, is_admin
+from utils import get_all_users_async, get_user_async, is_admin, get_default_kb
 from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
 
@@ -146,7 +146,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── 2) BACK TO MAIN MENU ───────────────────────────────────────────────────────
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Return to the main menu with the correct keyboard."""
-    from utils import get_default_kb
 
     tg_id = update.effective_user.id
     user = await users_col.find_one({"telegram_id": tg_id})
@@ -670,9 +669,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     """Send daily summary to admins and users, then deduct balances."""
-    from telegram.constants import ParseMode
-    from sheets_utils import update_user_balance_in_sheet
-    from utils import get_default_kb
 
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.datetime.now(tz)
