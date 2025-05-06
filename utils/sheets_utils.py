@@ -43,7 +43,7 @@ async def find_user_in_sheet(telegram_id: int) -> dict | None:
     if not ws:
         return None
     for rec in ws.get_all_records():
-        if str(rec.get("Telegram ID")) == str(telegram_id):
+        if str(rec.get("telegram_id")) == str(telegram_id):
             return rec
     return None
 
@@ -67,10 +67,10 @@ async def sync_balances_from_sheet(context=None) -> dict:
         return {"success": False, "error": "no worksheet"}
     updated = errors = 0
     for row in ws.get_all_records():
-        tid = row.get("Telegram ID")
+        tid = row.get("telegram_id")
         try:
             tid = int(tid)
-            bal = float(str(row.get("Balance", 0)).replace(",", ""))
+            bal = float(str(row.get("balance", 0)).replace(",", ""))
             res = await users_col.update_one(
                 {"telegram_id": tid},
                 {"$set": {"balance": bal}}
@@ -101,7 +101,7 @@ async def sync_balances_incremental():
     updates = []
     for row in rows:
         # tolerate both "Telegram ID" and "TelegramID"
-        raw_id = row.get("Telegram ID") or row.get("TelegramID")
+        raw_id = row.get("telegram_id") 
         if not raw_id:
             continue
         try:
@@ -109,7 +109,7 @@ async def sync_balances_incremental():
         except ValueError:
             continue
 
-        raw_bal = row.get("Balance")
+        raw_bal = row.get("balance")
         try:
             bal_sheet = float(str(raw_bal).replace(",", ""))
         except (TypeError, ValueError):
