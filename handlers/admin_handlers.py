@@ -100,10 +100,7 @@ def get_admin_kb():
 # ─── 1) /admin ENTRY & FIRST-TIME SETUP ────────────────────────────────────────
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /admin or “Ortga” from other admin flows: assign first admin if needed, then show panel."""
-    # Determine where to reply/edit
     is_callback = bool(update.callback_query)
-    target = update.callback_query.message if is_callback else update.message
-
     tg_id = update.effective_user.id
 
     # Ensure users_col is initialized
@@ -131,27 +128,43 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             },
             upsert=True,
         )
-        # Acknowledge first admin creation
+        # Acknowledge first‐admin creation
         if is_callback:
             await update.callback_query.answer()
-        await target.reply_text("✅ Siz birinchi admin bo‘ldingiz!")
+            # delete any old inline message
+            try:
+                await update.callback_query.message.delete()
+            except BadRequest:
+                pass
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="✅ Siz birinchi admin bo‘ldingiz!"
+        )
 
-    # Now fetch and show panel if they are admin
+    # Fetch and show panel
     user = await users_col.find_one({"telegram_id": tg_id})
     if user and user.get("is_admin", False):
-        text = "🔧 Admin panelga xush kelibsiz:"
-        kb   = get_admin_kb()
+        text, kb = "🔧 Admin panelga xush kelibsiz:", get_admin_kb()
     else:
-        text = "❌ Siz admin emassiz!"
-        kb   = None
+        text, kb = "❌ Siz admin emassiz!", None
 
+    # If invoked by callback, answer + delete old message
     if is_callback:
         await update.callback_query.answer()
-        await update.callback_query.message.edit_text(text, reply_markup=kb)
+        try:
+            await update.callback_query.message.delete()
+        except BadRequest:
+            pass
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=kb
+        )
     else:
         await update.message.reply_text(text, reply_markup=kb)
 
     return ConversationHandler.END
+
 
 # ─── 2) BACK TO MAIN MENU ───────────────────────────────────────────────────────
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,18 +179,21 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.callback_query:
         await update.callback_query.answer()
-        # 1) delete the old inline‐keyboard message
+        # Delete the current inline‐keyboard message
         try:
             await update.callback_query.message.delete()
         except BadRequest:
             pass
-        # 2) send a fresh message with the reply keyboard
-        await update.effective_chat.send_message(text, reply_markup=kb)
+        # Send a fresh reply with the reply‐keyboard
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=kb
+        )
     else:
         await update.message.reply_text(text, reply_markup=kb)
 
     return ConversationHandler.END
-
 
 # ─── 3) LIST USERS ──────────────────────────────────────────────────────────────
 
