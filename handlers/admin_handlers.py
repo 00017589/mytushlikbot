@@ -99,21 +99,21 @@ def get_admin_kb():
 
 # ─── 1) /admin ENTRY & FIRST-TIME SETUP ────────────────────────────────────────
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /admin: assign first admin if none exists, then show panel."""
+    """Handle /admin or “Ortga” from other admin flows: assign first admin if needed, then show panel."""
+    # Determine where to reply/edit
+    is_callback = bool(update.callback_query)
+    target = update.callback_query.message if is_callback else update.message
+
     tg_id = update.effective_user.id
 
-    # If no admin exists yet, make this user the first admin
-    global users_col  # Ensure we're modifying the global variable
-    # Initialize users_col if it's None
+    # Ensure users_col is initialized
+    global users_col
     if users_col is None:
         users_col = await get_collection("users")
-    
-    tg_id = update.effective_user.id
 
-    # If no admin exists yet, make this user the first admin
+    # First admin bootstrapping
     admin_exists = await users_col.count_documents({"is_admin": True}, limit=1) > 0
     if not admin_exists:
-        # Upsert the user as admin
         await users_col.update_one(
             {"telegram_id": tg_id},
             {
@@ -131,18 +131,25 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             },
             upsert=True,
         )
-        await update.message.reply_text("✅ Siz birinchi admin bo‘ldingiz!")
+        # Acknowledge first admin creation
+        if is_callback:
+            await update.callback_query.answer()
+        await target.reply_text("✅ Siz birinchi admin bo‘ldingiz!")
 
-    # Fetch the user record to check admin status
+    # Now fetch and show panel if they are admin
     user = await users_col.find_one({"telegram_id": tg_id})
     if user and user.get("is_admin", False):
-        # Show the admin keyboard
-        await update.message.reply_text(
-            "🔧 Admin panelga xush kelibsiz:",
-            reply_markup=get_admin_kb(),
-        )
+        text = "🔧 Admin panelga xush kelibsiz:"
+        kb   = get_admin_kb()
     else:
-        await update.message.reply_text("❌ Siz admin emassiz!")
+        text = "❌ Siz admin emassiz!"
+        kb   = None
+
+    if is_callback:
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text(text, reply_markup=kb)
+    else:
+        await update.message.reply_text(text, reply_markup=kb)
 
     return ConversationHandler.END
 
