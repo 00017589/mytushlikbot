@@ -742,6 +742,25 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.edit_text("❌ Noma’lum buyruq.", reply_markup=get_menu_kb())
 
+async def deduct_balance_for_user(u: User, date: str):
+    """
+    Deduct u.daily_price from the user’s balance in MongoDB, then push that
+    new balance to Google Sheets. Raises if either step fails.
+    """
+    # 1) Deduct and save in Mongo
+    u.balance -= u.daily_price
+    await u._record_txn("lunch", -u.daily_price, f"Lunch {date}")
+    await u.save()
+
+    # 2) Push to sheets
+    success = await update_user_balance_in_sheet(u.telegram_id, u.balance)
+    if not success:
+        # Roll back the Mongo change so you don't get out of sync
+        u.balance += u.daily_price
+        await u._record_txn("rollback", u.daily_price, f"Rollback {date}")
+        await u.save()
+        raise RuntimeError(f"Failed to update sheet for {u.telegram_id}")
+
 async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     """Send daily summary to admins and users, then deduct balances."""
 
@@ -806,12 +825,17 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
 
     # Deduct balances & update Sheets
     for u in attendees:
-        u.balance -= u.daily_price
-        await u.save()
         try:
-            await update_user_balance_in_sheet(u.telegram_id, u.balance)
+            await deduct_balance_for_user(u, today)
         except Exception as e:
-            logger.error(f"Sheets update failed for {u.name}: {e}")
+            logger.error(f"Error processing deduction for {u.name} ({u.telegram_id}): {e}")
+            # Optionally notify admins of the failure
+            for admin in users:
+                if admin.is_admin:
+                    await context.bot.send_message(
+                        admin.telegram_id,
+                        f"⚠️ Auto-deduction failed for {u.name}: {e}"
+                    )
 
     # Send each participant their recap
     for u in attendees:
