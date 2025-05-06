@@ -32,7 +32,7 @@ from utils import (
     get_all_users_async,
 )
 from config import DEFAULT_DAILY_PRICE
-from sheets_utils import find_user_in_sheet
+from utils.sheets_utils import find_user_in_sheet
 
 logger = logging.getLogger(__name__)
 
