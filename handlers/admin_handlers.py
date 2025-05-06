@@ -214,27 +214,25 @@ async def start_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+# ─── Promote to admin ──────────────────────────────────────────────────────────
 async def add_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle selecting a user to promote to admin."""
     query = update.callback_query
     await query.answer()
 
     if query.data == "back_to_menu":
+        # delete the inline menu and show admin panel
         await query.message.delete()
+        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return
 
-    # Data format: "add_admin:<telegram_id>"
-    _, str_id = query.data.split(":", 1)
-    user_id = int(str_id)
-
-    await users_col.update_one(
-        {"telegram_id": user_id},
-        {"$set": {"is_admin": True}}
-    )
+    # data is "add_admin:<id>"
+    user_id = int(query.data.split(":", 1)[1])
+    await users_col.update_one({"telegram_id": user_id}, {"$set": {"is_admin": True}})
     user = await users_col.find_one({"telegram_id": user_id})
 
+    # update inline menu to confirm
     await query.message.edit_text(f"✅ {user['name']} admin qilindi!")
-    # Redisplay list in case admin wants to promote more
+    # re‑display the promotion list
     await start_add_admin(update, context)
 
 async def start_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -258,28 +256,23 @@ async def start_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+# ─── Demote from admin ─────────────────────────────────────────────────────────
 async def remove_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle selecting an admin to demote."""
     query = update.callback_query
     await query.answer()
 
     if query.data == "back_to_menu":
         await query.message.delete()
+        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return
 
-    # Data format: "remove_admin:<telegram_id>"
-    _, str_id = query.data.split(":", 1)
-    user_id = int(str_id)
-
-    await users_col.update_one(
-        {"telegram_id": user_id},
-        {"$set": {"is_admin": False}}
-    )
+    user_id = int(query.data.split(":", 1)[1])
+    await users_col.update_one({"telegram_id": user_id}, {"$set": {"is_admin": False}})
     user = await users_col.find_one({"telegram_id": user_id})
 
     await query.message.edit_text(f"✅ {user['name']} adminlikdan olib tashlandi!")
-    # Redisplay list in case admin wants to demote more
     await start_remove_admin(update, context)
+
 
 # ─── 5) SET PRICE ───────────────────────────────────────────────────────────────
 
@@ -317,69 +310,55 @@ async def start_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+# ─── Price‑setting flow ────────────────────────────────────────────────────────
 async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle price change callbacks"""
-    logger.info(f"daily_price_callback: {update.callback_query.data}")
     query = update.callback_query
     await query.answer()
     data = query.data
 
     if data == "back_to_menu":
         await query.message.delete()
-        await query.message.reply_text("Admin panel:", reply_markup=get_admin_kb())
+        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return
 
     if data.startswith("set_price:"):
-        user_id = int(data.split(":", 1)[1])
-        user = await users_col.find_one({"telegram_id": user_id})
+        uid = int(data.split(":", 1)[1])
+        user = await users_col.find_one({"telegram_id": uid})
         if not user:
-            await query.message.edit_text(
-                "❌ Foydalanuvchi topilmadi.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")]])
-            )
+            await query.message.edit_text("❌ Foydalanuvchi topilmadi.", reply_markup=get_menu_kb())
             return
 
-        context.user_data["pending_price_user"] = user_id
-        base = InlineKeyboardButton(BACK_BTN, callback_data="back_to_price_list")
-        preset_buttons = [
-            InlineKeyboardButton(str(p), callback_data=f"confirm_price:{user_id}:{p}")
-            for p in (25000, 30000, 35000, 40000)
-        ]
-        keyboard = [[btn] for btn in preset_buttons] + [[InlineKeyboardButton("Boshqa narx", callback_data=f"custom_price:{user_id}")], [base]]
+        context.user_data["pending_price_user"] = uid
+        # build preset buttons...
+        btns = [InlineKeyboardButton(str(p), callback_data=f"confirm_price:{uid}:{p}")
+                for p in (25000,30000,35000,40000)]
+        kb = InlineKeyboardMarkup([[b] for b in btns] + [[InlineKeyboardButton("Boshqa narx", callback_data=f"custom_price:{uid}")]])
         await query.message.edit_text(
-            f"{user['name']} uchun yangi kunlik narxni tanlang:\n"
-            f"Joriy narx: {user.get('daily_price', 0):,} so‘m",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            f"{user['name']} uchun yangi narx tanlang:\nJoriy: {user['daily_price']:,} so‘m",
+            reply_markup=kb
         )
         return
 
     if data.startswith("confirm_price:"):
-        _, user_id, price = data.split(":")
-        user_id, price = int(user_id), float(price)
-        await users_col.update_one({"telegram_id": user_id}, {"$set": {"daily_price": price}})
-        user = await users_col.find_one({"telegram_id": user_id})
-        await query.message.edit_text(
-            f"✅ {user['name']} uchun kunlik narx {price:,.2f} so‘mga o‘zgartirildi!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")]])
+        _, uid, price = data.split(":")
+        await users_col.update_one({"telegram_id": int(uid)}, {"$set": {"daily_price": float(price)}})
+        u = await users_col.find_one({"telegram_id": int(uid)})
+        # done: delete inline menu + show panel
+        await query.message.delete()
+        await query.message.reply_text(
+            f"✅ {u['name']} narxi {float(price):,.0f} so‘mga o‘zgartirildi.\n🔧 Admin panelga qaytdingiz.",
+            reply_markup=get_admin_kb()
         )
         context.user_data.pop("pending_price_user", None)
         return
 
     if data.startswith("custom_price:"):
-        user_id = int(data.split(":", 1)[1])
-        user = await users_col.find_one({"telegram_id": user_id})
-        if not user:
-            await query.message.edit_text(
-                "❌ Foydalanuvchi topilmadi.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")]])
-            )
-            return
-
-        context.user_data["pending_price_user"] = user_id
+        uid = int(data.split(":",1)[1])
+        user = await users_col.find_one({"telegram_id": uid})
+        context.user_data["pending_price_user"] = uid
         await query.message.edit_text(
-            f"{user['name']} uchun yangi kunlik narxni kiriting:\n"
-            f"Joriy narx: {user.get('daily_price', 0):,} so‘m",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="back_to_price_list")]])
+            f"{user['name']} uchun narxni kiriting (raqam):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_menu")]])
         )
         return
 
@@ -427,29 +406,33 @@ async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+# ─── Delete a user ─────────────────────────────────────────────────────────────
 async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the deletion or back‑to‑menu action."""
     query = update.callback_query
     await query.answer()
-    data = query.data
 
-    if data == "back_to_menu":
-        return await back_to_menu(update, context)
+    if query.data == "back_to_menu":
+        # go back
+        await query.message.delete()
+        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
+        return
 
-    # Delete selected user
-    user_id = int(data.split(":", 1)[1])
+    user_id = int(query.data.split(":", 1)[1])
     user = await users_col.find_one({"telegram_id": user_id})
     if not user:
-        await query.message.edit_text("❌ Foydalanuvchi topilmadi.", reply_markup=get_admin_kb())
-        return ConversationHandler.END
+        await query.message.edit_text("❌ Foydalanuvchi topilmadi.", reply_markup=get_menu_kb())
+        return
 
-    # Clean up
+    # clean up
     await (await get_collection("daily_food_choices")).delete_many({"telegram_id": user_id})
     await users_col.delete_one({"telegram_id": user_id})
 
-    # Confirm deletion
-    await query.message.edit_text(f"✅ {user['name']} muvaffaqiyatli o‘chirildi!", reply_markup=get_admin_kb())
-    return ConversationHandler.END
+    # confirm and then show panel
+    await query.message.delete()
+    await query.message.reply_text(
+        f"✅ {user['name']} muvaffaqiyatli o‘chirildi!\n🔧 Admin panelga qaytdingiz.",
+        reply_markup=get_admin_kb()
+    )
 
 async def show_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show current kassa amount from Google Sheets and save to DB."""
