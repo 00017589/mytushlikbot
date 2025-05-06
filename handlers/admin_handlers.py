@@ -91,6 +91,7 @@ def get_admin_kb():
         [ADD_ADMIN_BTN, REMOVE_ADMIN_BTN],
         [DAILY_PRICE_BTN, DELETE_USER_BTN],
         [CXL_LUNCH_BTN, CARD_BTN],
+        [KASSA_BTN],   
         [BACK_BTN],
     ], resize_keyboard=True)  
 
@@ -473,17 +474,19 @@ async def show_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Kassa miqdorini o'qishda xatolik.")
             return
 
-        # 4) Save to MongoDB
-        #    We'll upsert into a single-doc collection called "kassa"
+        # 4) Save to MongoDB (single-document "kassa" collection)
         kassa_col = await get_collection("kassa")
         await kassa_col.update_one(
-            {}, 
-            {"$set": {"amount": kassa_value, "last_updated": datetime.utcnow()}},
+            {},
+            {"$set": {
+                "amount": kassa_value,
+                "last_updated": datetime.utcnow()
+            }},
             upsert=True
         )
 
-        # 5) Send to admin
-        text = f"💰 *Kassa miqdori:* {kassa_value:,.0f} so'm"
+        # 5) Send result back to admin with the admin keyboard
+        text = f"💰 *Kassa miqdori:* {kassa_value:,.0f} so‘m"
         await update.message.reply_text(
             text,
             parse_mode='Markdown',
@@ -1025,11 +1028,15 @@ def register_handlers(app):
     for text, handler in single_buttons:
         app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(text)}$"), handler))
 
+    # ─── 2.1) Inline callbacks for add/remove/delete admin & users ────────
+    app.add_handler(CallbackQueryHandler(add_admin_callback,    pattern=r"^add_admin:\d+$"))
+    app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
+    app.add_handler(CallbackQueryHandler(delete_user_callback,  pattern=r"^delete_user:\d+$"))
+
     # ─── 3) Menu management callbacks ────────────────────────────────────
-    # Only one CallbackQueryHandler for all menu actions:
     menu_pattern = r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1|del_menu2|menu_back)$"
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=menu_pattern))
-    # And the text handler for when admin types a new item name:
+    # And text handler for adding new menu items
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
 
     # ─── 4) Lunch cancellation conversation ──────────────────────────────
