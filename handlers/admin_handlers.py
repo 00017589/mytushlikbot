@@ -351,108 +351,124 @@ async def start_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the daily price change flow"""
     logger.info("start_daily_price: Starting price change flow")
 
-    # pick the right message target
-    msg = update.callback_query.message if update.callback_query else update.message
+    # choose where to send/edit
+    target = update.callback_query.message if update.callback_query else update.message
 
     users = await users_col.find().to_list(length=None)
     if not users:
-        return await msg.reply_text(
+        return await target.reply_text(
             "Hech qanday foydalanuvchi yo‘q.",
             reply_markup=get_admin_kb()
         )
 
     keyboard = [
-        [
-            InlineKeyboardButton(
-                f"{u['name']} ({u.get('daily_price', 0):,} so‘m)",
-                callback_data=f"set_price:{u['telegram_id']}"
-            )
-        ]
+        [InlineKeyboardButton(f"{u['name']} ({u.get('daily_price', 0):,} so‘m)",
+                              callback_data=f"set_price:{u['telegram_id']}")]
         for u in users
     ]
-    # use a specific back callback
-    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_price_list")])
+    # back from price list to admin panel
+    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_admin")])
 
     text = "Kunlik narxini o‘zgartirmoqchi bo‘lgan foydalanuvchini tanlang:"
     if update.callback_query:
-        await msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await target.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await target.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ─── Price‑setting flow ────────────────────────────────────────────────────────
+
 async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all inline steps of the price change flow."""
     query = update.callback_query
     await query.answer()
     data = query.data
 
-    if data == "back_to_menu":
+    # 1) Ortga: drop inline menu & show admin panel
+    if data == "back_to_admin":
         await query.message.delete()
-        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
-        return
+        await query.message.reply_text(
+            "🔧 Admin panelga qaytdingiz.",
+            reply_markup=get_admin_kb()
+        )
+        return ConversationHandler.END
 
+    # 2) Select user → show presets + “Boshqa narx”
     if data.startswith("set_price:"):
         uid = int(data.split(":", 1)[1])
         user = await users_col.find_one({"telegram_id": uid})
         if not user:
-            await query.message.edit_text("❌ Foydalanuvchi topilmadi.", reply_markup=get_menu_kb())
-            return
+            return await query.message.edit_text(
+                "❌ Foydalanuvchi topilmadi.",
+                reply_markup=get_admin_kb()
+            )
 
         context.user_data["pending_price_user"] = uid
-        # build preset buttons...
-        btns = [InlineKeyboardButton(str(p), callback_data=f"confirm_price:{uid}:{p}")
-                for p in (25000,30000,35000,40000)]
-        kb = InlineKeyboardMarkup([[b] for b in btns] + [[InlineKeyboardButton("Boshqa narx", callback_data=f"custom_price:{uid}")]])
+        presets = [25000, 30000, 35000, 40000]
+        btn_rows = [[InlineKeyboardButton(str(p), callback_data=f"confirm_price:{uid}:{p}")] for p in presets]
+        btn_rows.append([InlineKeyboardButton("Boshqa narx", callback_data=f"custom_price:{uid}")])
+        btn_rows.append([InlineKeyboardButton("Ortga", callback_data="back_to_admin")])
+
         await query.message.edit_text(
-            f"{user['name']} uchun yangi narx tanlang:\nJoriy: {user['daily_price']:,} so‘m",
-            reply_markup=kb
+            f"{user['name']} uchun yangi narx tanlang:\nJoriy: {user.get('daily_price',0):,} so‘m",
+            reply_markup=InlineKeyboardMarkup(btn_rows)
         )
         return
 
+    # 3) Preset chosen → apply, then teardown
     if data.startswith("confirm_price:"):
         _, uid, price = data.split(":")
         await users_col.update_one({"telegram_id": int(uid)}, {"$set": {"daily_price": float(price)}})
         u = await users_col.find_one({"telegram_id": int(uid)})
-        # done: delete inline menu + show panel
+
         await query.message.delete()
         await query.message.reply_text(
             f"✅ {u['name']} narxi {float(price):,.0f} so‘mga o‘zgartirildi.\n🔧 Admin panelga qaytdingiz.",
             reply_markup=get_admin_kb()
         )
         context.user_data.pop("pending_price_user", None)
-        return
+        return ConversationHandler.END
 
+    # 4) Custom price path: prompt for text input
     if data.startswith("custom_price:"):
         uid = int(data.split(":",1)[1])
         user = await users_col.find_one({"telegram_id": uid})
         context.user_data["pending_price_user"] = uid
+
         await query.message.edit_text(
-            f"{user['name']} uchun narxni kiriting (raqam):",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ortga", callback_data="back_to_admin")]])
+            f"{user['name']} uchun narxni raqam ko‘rinishida kiriting:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Ortga", callback_data="back_to_admin")]
+            ])
         )
         return
 
+
 async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the custom price input"""
-    user_id = context.user_data.get("pending_price_user")
-    text = update.message.text.strip().replace(" ", "").replace(",", "")
+    """Handle the custom price text entry."""
+    uid = context.user_data.get("pending_price_user")
+    text = update.message.text.strip().replace(",", "").replace(" ", "")
+
+    # invalid number?
     try:
         price = float(text)
         if price < 0:
-            raise ValueError("Negative")
+            raise ValueError()
     except ValueError:
-        await update.message.reply_text(
+        return await update.message.reply_text(
             "❌ Iltimos, haqiqiy raqam kiriting!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="back_to_price_list")]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Ortga", callback_data="back_to_admin")]
+            ])
         )
-        return
 
-    await users_col.update_one({"telegram_id": user_id}, {"$set": {"daily_price": price}})
-    user = await users_col.find_one({"telegram_id": user_id})
+    # save and teardown
+    await users_col.update_one({"telegram_id": uid}, {"$set": {"daily_price": price}})
+    u = await users_col.find_one({"telegram_id": uid})
     await update.message.reply_text(
-        f"✅ {user['name']} uchun kunlik narx {price:,.2f} so‘mga o‘zgartirildi!",
+        f"✅ {u['name']} uchun kunlik narx {price:,.0f} so‘mga o‘zgartirildi!",
         reply_markup=get_admin_kb()
     )
     context.user_data.pop("pending_price_user", None)
+    return ConversationHandler.END
 
 # ─── 6) DELETE USER ─────────────────────────────────────────────────────────────
 
