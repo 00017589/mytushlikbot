@@ -85,30 +85,41 @@ async def sync_balances_from_sheet(context=None) -> dict:
 # in utils/sheets_utils.py
 
 async def sync_balances_incremental():
-    # 1) Get the Mongo collection
+    # 1) Grab a fresh handle to the users col
     users_collection = await get_collection("users")
 
-    # 2) Snapshot all DB users
+    # 2) Snapshot DB
     db_users = await users_collection.find(
         {}, {"telegram_id": 1, "balance": 1}
     ).to_list(length=None)
-
     db_map = {u["telegram_id"]: u["balance"] for u in db_users}
 
-    # 3) Fetch sheet rows
+    # 3) Fetch sheet rows once
     worksheet = await get_worksheet()
     rows = worksheet.get_all_records()
 
-    # 4) Build deltas
     updates = []
     for row in rows:
-        tg_id = int(row["Telegram ID"])
-        bal_sheet = float(str(row["Balance"]).replace(",", ""))
+        # tolerate both "Telegram ID" and "TelegramID"
+        raw_id = row.get("Telegram ID") or row.get("TelegramID")
+        if not raw_id:
+            continue
+        try:
+            tg_id = int(raw_id)
+        except ValueError:
+            continue
+
+        raw_bal = row.get("Balance")
+        try:
+            bal_sheet = float(str(raw_bal).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+
         bal_db = db_map.get(tg_id)
         if bal_db is not None and bal_db != bal_sheet:
             updates.append((tg_id, bal_sheet))
 
-    # 5) Bulk write
+    # 4) Bulk update
     if updates:
         ops = [
             pymongo.UpdateOne({"telegram_id": tg}, {"$set": {"balance": bal}})
@@ -116,4 +127,5 @@ async def sync_balances_incremental():
         ]
         await users_collection.bulk_write(ops)
 
+    # return list of updated IDs
     return [tg for tg, _ in updates]
