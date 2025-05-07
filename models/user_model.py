@@ -91,6 +91,7 @@ class User:
         )
 
     def _record_txn(self, txn_type: str, amount: int, desc: str):
+        """Record a transaction in‑memory; called synchronously."""
         now_iso = datetime.now(timezone.utc).isoformat()
         self.transactions.append({
             "type": txn_type,
@@ -127,9 +128,10 @@ class User:
         # 1) Deduct locally
         self.attendance.append(date_str)
         self.balance -= self.daily_price
-        await self._record_txn("attendance", -self.daily_price, f"Lunch on {date_str}")
+        # synchronous call
+        self._record_txn("attendance", -self.daily_price, f"Lunch on {date_str}")
 
-        # 2) Save to daily_food_choices if provided
+        # 2) Save food choice if provided
         if food:
             col = await get_collection("daily_food_choices")
             await col.update_one(
@@ -143,16 +145,15 @@ class User:
                 upsert=True
             )
 
-        # 3) Persist the new balance in MongoDB
+        # 3) Persist the new balance + attendance in MongoDB
         await self.save()
-
         from utils.sheets_utils import update_user_balance_in_sheet
         # 4) Push balance to Google Sheets (and roll back on failure)
         success = await update_user_balance_in_sheet(self.telegram_id, self.balance)
         if not success:
-            # roll back
+            # Roll back in memory and in DB
             self.balance += self.daily_price
-            await self._record_txn("rollback", self.daily_price, f"Rollback lunch on {date_str}")
+            self._record_txn("rollback", self.daily_price, f"Rollback lunch on {date_str}")
             await self.save()
             raise RuntimeError(f"Failed to sync balance for {self.telegram_id} to Sheets")
 
