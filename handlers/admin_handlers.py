@@ -1,7 +1,7 @@
 # handlers/admin_handlers.py
 import re
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timezone
 import pytz
 
 from telegram.constants import ParseMode
@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 from database import get_collection
-from utils.sheets_utils import sync_balances_from_sheet, get_worksheet, update_user_balance_in_sheet, find_user_in_sheet, sync_balances_incremental
+from utils.sheets_utils import get_worksheet, update_user_balance_in_sheet, sync_balances_incremental
 from utils import get_all_users_async, get_user_async, is_admin, get_default_kb
 from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
@@ -552,7 +552,7 @@ async def show_kassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
             {},
             {"$set": {
                 "amount": kassa_value,
-                "last_updated": datetime.utcnow()
+                "last_updated": datetime.now(timezone.utc)
             }},
             upsert=True
         )
@@ -742,21 +742,54 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.edit_text("❌ Noma’lum buyruq.", reply_markup=get_menu_kb())
 
-async def send_summary(context: ContextTypes.DEFAULT_TYPE):
-    """Send daily summary to admins and users, then deduct balances."""
+async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
+    """Send final summary of broadcast at 10:00 AM."""
+    job = context.job
+    chat_id = job.data.get("chat_id")
+    if not chat_id or "notify_responses" not in context.user_data:
+        return
 
-    tz = pytz.timezone("Asia/Tashkent")
-    now = datetime.now(tz)
+    resp = context.user_data["notify_responses"]
+    total   = resp.get("total_sent", 0)
+    yes     = len(resp.get("yes", []))
+    no      = len(resp.get("no", []))
+    pending = total - yes - no
+
+    lines = [
+        "📊 Xabar yuborish yakuniy natijalari:",
+        f"👥 Jami yuborilgan: {total}",
+        f"✅ Ha: {yes}",
+        f"❌ Yoʻq: {no}",
+        f"⏳ Javob bermaganlar: {pending}",
+    ]
+    if resp.get("failed"):
+        lines.append(f"⚠️ Yuborilmadi: {len(resp['failed'])}")
+
+    await context.bot.send_message(chat_id, "\n".join(lines))
+
+    # clean up
+    context.user_data.pop("notify_responses", None)
+    context.user_data.pop("notify_message_id", None)
+
+
+# ─── 9b) Daily lunch summary & deduction ────────────────────────────────────
+async def send_summary(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Send daily attendance summary to all admins and users, then deduct balances.
+    Scheduled at 10:00 Asia/Tashkent.
+    """
+    tz    = pytz.timezone("Asia/Tashkent")
+    now   = datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
 
-    # Skip weekends
+    # skip weekends
     if now.weekday() >= 5:
         return
 
     users = await get_all_users_async()
     attendees, attendee_details, declined, pending = [], [], [], []
 
-    # Classify users
+    # categorize
     for u in users:
         if today in u.attendance:
             attendees.append(u)
@@ -767,44 +800,72 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
         else:
             pending.append(u.name)
 
-    # Aggregate food counts
+    # aggregate counts
     counts = await User.get_daily_food_counts(today)
-    # Determine most popular
-    most = []
+    most   = []
     if counts:
         max_count = max(d["count"] for d in counts.values())
-        tied = [f for f,d in counts.items() if d["count"] == max_count]
+        tied = [f for f, d in counts.items() if d["count"] == max_count]
         most = sorted(tied) if len(tied) > 1 else [tied[0]]
 
-    # Build admin summary
-    admin_summary = "📊 *Bugungi tushlik uchun yig‘ilish:*\n\n"
-    admin_summary += f"👥 Jami: *{len(attendees)}* kishi\n\n"
-    admin_summary += "📝 *Ro‘yxat:*\n"
+    # build admin summary
+    admin_lines = [
+        "📊 *Bugungi tushlik uchun yig‘ilish:*",
+        f"👥 Jami: *{len(attendees)}* kishi",
+        "",
+        "📝 *Ro‘yxat:*"
+    ]
     if attendee_details:
-        for i,(n,f) in enumerate(attendee_details,1):
-            admin_summary += f"{i}. {n} — {f or 'Tanlanmagan'}\n"
+        admin_lines += [f"{i+1}. {n} — {f or 'Tanlanmagan'}"
+                        for i, (n, f) in enumerate(attendee_details)]
     else:
-        admin_summary += "Hech kim yo‘q\n"
-    admin_summary += "\n🍽 *Taomlar statistikasi:*\n"
-    if counts:
-        for i,(f,d) in enumerate(counts.items(),1):
-            admin_summary += f"{i}. {f} — {d['count']} ta\n"
-    else:
-        admin_summary += "— Hech qanday taom tanlanmadi\n"
-    if declined:
-        admin_summary += "\n❌ *Rad etganlar:*\n" + "\n".join(f"{i+1}. {n}" for i,n in enumerate(declined)) + "\n"
-    if pending:
-        admin_summary += "\n⏳ *Javob bermaganlar:*\n" + "\n".join(f"{i+1}. {n}" for i,n in enumerate(pending)) + "\n"
+        admin_lines.append("Hech kim yo‘q")
 
-    # Send to admins
+    admin_lines.append("\n🍽 *Taomlar statistikasi:*")
+    if counts:
+        admin_lines += [f"{i+1}. {food} — {data['count']} ta"
+                        for i, (food, data) in enumerate(counts.items())]
+    else:
+        admin_lines.append("— Hech qanday taom tanlanmadi")
+
+    if declined:
+        admin_lines += ["\n❌ *Rad etganlar:*"] + [
+            f"{i+1}. {n}" for i, n in enumerate(declined)
+        ]
+    if pending:
+        admin_lines += ["\n⏳ *Javob bermaganlar:*"] + [
+            f"{i+1}. {n}" for i, n in enumerate(pending)
+        ]
+
+    admin_text = "\n".join(admin_lines)
+
+    # send to each admin
     for u in users:
         if u.is_admin:
             try:
-                await context.bot.send_message(u.telegram_id, admin_summary, parse_mode=ParseMode.MARKDOWN)
+                await context.bot.send_message(u.telegram_id, admin_text, parse_mode=ParseMode.MARKDOWN)
             except Exception as e:
-                logger.error(f"Failed admin summary to {u.name}: {e}")
+                logger.error(f"Failed sending summary to admin {u.telegram_id}: {e}")
 
-    # Send each participant their recap
+    # deduct balances and update Sheets
+    for u in attendees:
+        try:
+            # deduct in model, persist, then sync to Sheets
+            u.balance -= u.daily_price
+            await u._record_txn("lunch", -u.daily_price, f"Tushlik {today}")
+            await u.save()
+
+            success = await update_user_balance_in_sheet(u.telegram_id, u.balance)
+            if not success:
+                # rollback
+                u.balance += u.daily_price
+                await u._record_txn("rollback", u.daily_price, f"Rollback {today}")
+                await u.save()
+                logger.error(f"Rollback applied for {u.telegram_id} after Sheets failure")
+        except Exception as e:
+            logger.error(f"Error deducting for {u.telegram_id}: {e}")
+
+    # notify each attendee
     for u in attendees:
         try:
             if most:
@@ -829,8 +890,7 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
                 )
             await context.bot.send_message(u.telegram_id, text, reply_markup=get_default_kb(u.is_admin))
         except Exception as e:
-            logger.error(f"User recap failed to {u.name}: {e}")
-
+            logger.error(f"Failed user recap for {u.telegram_id}: {e}")
 
 # ─── 7) CARD MANAGEMENT ─────────────────────────────────────────────────────────
 
