@@ -128,7 +128,7 @@ class User:
         # 1) Deduct locally
         self.attendance.append(date_str)
         self.balance -= self.daily_price
-        # synchronous call
+        # <-- call _record_txn synchronously, no await
         self._record_txn("attendance", -self.daily_price, f"Lunch on {date_str}")
 
         # 2) Save food choice if provided
