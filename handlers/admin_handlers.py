@@ -894,37 +894,35 @@ async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return S_CARD_OWNER
 
 async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the new card owner name input and save both to database"""
+    """Handle the new card owner name input and save both to database."""
+    # If they tapped “Ortga”, send them back into the admin panel
     if update.message.text == BACK_BTN:
-        await update.message.reply_text(
-            "Admin panel:",
-            reply_markup=get_admin_kb()
-        )
-        return ConversationHandler.END
+        return await admin_panel(update, context)
 
-    from database import get_collection
+    # Otherwise save the new details
     card_details_col = await get_collection("card_details")
 
-    # Update or insert new card details
     await card_details_col.update_one(
-        {},  # empty filter to match any document
+        {},  # match the single doc
         {
             "$set": {
                 "card_number": context.user_data['new_card_number'],
                 "card_owner": update.message.text
             }
         },
-        upsert=True  # create if doesn't exist
+        upsert=True
     )
 
-    # Clear temporary data
+    # Clear temp storage
     context.user_data.pop('new_card_number', None)
 
+    # Confirm and show the admin panel again
     await update.message.reply_text(
         "✅ Karta ma'lumotlari muvaffaqiyatli o'zgartirildi!",
         reply_markup=get_admin_kb()
     )
     return ConversationHandler.END
+
 
 # ─── 9) NOTIFY ALL ─────────────────────────────────────────────────────────────
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
