@@ -17,7 +17,6 @@ else:
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
-from telegram.error import NetworkError, TimedOut
 
 from database import init_db
 from config import BOT_TOKEN, MONGODB_URI
