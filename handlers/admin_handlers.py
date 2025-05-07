@@ -746,7 +746,7 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     """Send daily summary to admins and users, then deduct balances."""
 
     tz = pytz.timezone("Asia/Tashkent")
-    now = datetime.datetime.now(tz)
+    now = datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
 
     # Skip weekends
