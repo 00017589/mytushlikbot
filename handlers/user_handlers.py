@@ -368,8 +368,3 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{NO}$"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^food:"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^cancel_attendance$"))
-
-    # jobs
-    tz = pytz.timezone("Asia/Tashkent")
-    app.job_queue.run_daily(morning_prompt, time=dt_time(7,0,tzinfo=tz), days=(0,1,2,3,4), name="morning_survey")
-    app.job_queue.run_daily(check_debts,     time=dt_time(12,0,tzinfo=tz), days=(0,2,4), name="debt_check")
