@@ -5,6 +5,7 @@ from database import get_collection
 from config import DEFAULT_DAILY_PRICE, DEFAULT_INITIAL_BALANCE
 from pymongo import ReadPreference
 import logging
+from utils.sheets_utils import update_user_balance_in_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -121,39 +122,65 @@ class User:
         return result
 
     async def add_attendance(self, date_str: str, food: str = None):
-        if date_str not in self.attendance:
-            self.attendance.append(date_str)
-            self.balance -= self.daily_price
-            self._record_txn("attendance", -self.daily_price, f"Lunch on {date_str}")
+        if date_str in self.attendance:
+            return
 
-            # record food choice
-            if food:
-                col = await get_collection("daily_food_choices")
-                await col.update_one(
-                    {"telegram_id": self.telegram_id, "date": date_str},
-                    {"$set": {
-                        "telegram_id": self.telegram_id,
-                        "date": date_str,
-                        "food_choice": food,
-                        "user_name": self.name
-                    }},
-                    upsert=True
-                )
+        # 1) Deduct locally
+        self.attendance.append(date_str)
+        self.balance -= self.daily_price
+        await self._record_txn("attendance", -self.daily_price, f"Lunch on {date_str}")
 
+        # 2) Save to daily_food_choices if provided
+        if food:
+            col = await get_collection("daily_food_choices")
+            await col.update_one(
+                {"telegram_id": self.telegram_id, "date": date_str},
+                {"$set": {
+                    "telegram_id": self.telegram_id,
+                    "date": date_str,
+                    "food_choice": food,
+                    "user_name": self.name
+                }},
+                upsert=True
+            )
+
+        # 3) Persist the new balance in MongoDB
+        await self.save()
+
+        # 4) Push balance to Google Sheets (and roll back on failure)
+        success = await update_user_balance_in_sheet(self.telegram_id, self.balance)
+        if not success:
+            # roll back
+            self.balance += self.daily_price
+            await self._record_txn("rollback", self.daily_price, f"Rollback lunch on {date_str}")
             await self.save()
+            raise RuntimeError(f"Failed to sync balance for {self.telegram_id} to Sheets")
 
     async def remove_attendance(self, date_str: str):
-        if date_str in self.attendance:
-            self.attendance.remove(date_str)
-            self.balance += self.daily_price
-            self._record_txn("cancel", self.daily_price, f"Cancel lunch on {date_str}")
+        if date_str not in self.attendance:
+            return
 
-            # remove food choice
-            col = await get_collection("daily_food_choices")
-            await col.delete_one({"telegram_id": self.telegram_id, "date": date_str})
+        # 1) Refund locally
+        self.attendance.remove(date_str)
+        self.balance += self.daily_price
+        await self._record_txn("cancel", self.daily_price, f"Cancel lunch on {date_str}")
 
+        # 2) Remove the daily_food_choices entry
+        col = await get_collection("daily_food_choices")
+        await col.delete_one({"telegram_id": self.telegram_id, "date": date_str})
+
+        # 3) Persist the new balance in MongoDB
+        await self.save()
+
+        # 4) Push balance back to Google Sheets (and roll back on failure)
+        success = await update_user_balance_in_sheet(self.telegram_id, self.balance)
+        if not success:
+            # roll back
+            self.balance -= self.daily_price
+            await self._record_txn("rollback", -self.daily_price, f"Rollback cancel on {date_str}")
             await self.save()
-
+            raise RuntimeError(f"Failed to sync refund for {self.telegram_id} to Sheets")
+        
     async def decline_attendance(self, date_str: str):
         if date_str not in self.declined_days:
             self.declined_days.append(date_str)
