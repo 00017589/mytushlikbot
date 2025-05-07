@@ -195,13 +195,29 @@ class User:
         self.is_admin = False
         self._record_txn("admin", 0, "Demoted from admin")
         await self.save()
-    async def set_food_choice(self, date: str, food: str):
-        # save into MongoDB daily_food_choices collection
+    async def set_food_choice(self, date: str, food: str) -> bool:
+        """
+        Record today’s food choice for this user, both in MongoDB and in-memory.
+
+        Returns True on success, False on failure.
+        """
         col = await get_collection("daily_food_choices")
-        await col.update_one(
-            {"telegram_id": self.telegram_id, "date": date},
-            {"$set": {"food_choice": food, "user_name": self.name}},
-            upsert=True
-        )
-        # also keep it in the in‑memory object if you want
-        self.food_choices[date] = food
+        try:
+            result = await col.update_one(
+                {"telegram_id": self.telegram_id, "date": date},
+                {
+                    "$set": {
+                        "food_choice": food,
+                        "user_name": self.name,
+                        # you could also store daily_price here if useful
+                    }
+                },
+                upsert=True
+            )
+            # reflect in-memory
+            self.food_choices[date] = food
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set food choice for {self.telegram_id} on {date}: {e}")
+            return False
+
