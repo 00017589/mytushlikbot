@@ -74,7 +74,7 @@ def cleanup_lock(fd, path):
 
 async def cleanup_old_data(context):
     logger.info("Midnight cleanup…")
-    await User.cleanup_old_food_choices(is_test=False)
+    await User.cleanup_old_food_choices()
     logger.info("Cleanup done.")
 
 def main():
