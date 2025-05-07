@@ -133,7 +133,7 @@ def main():
 
         jq.run_daily(
             uh.check_debts,
-            time=dt_time(12, 0, tzinfo=tz),
+            time=dt_time(13, 0, tzinfo=tz),
             days=(0, 2, 4),  # Monday, Wednesday, Friday
             name="debt_check"
         )
