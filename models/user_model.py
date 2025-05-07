@@ -5,7 +5,6 @@ from database import get_collection
 from config import DEFAULT_DAILY_PRICE, DEFAULT_INITIAL_BALANCE
 from pymongo import ReadPreference
 import logging
-from utils.sheets_utils import update_user_balance_in_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +146,7 @@ class User:
         # 3) Persist the new balance in MongoDB
         await self.save()
 
+        from utils.sheets_utils import update_user_balance_in_sheet
         # 4) Push balance to Google Sheets (and roll back on failure)
         success = await update_user_balance_in_sheet(self.telegram_id, self.balance)
         if not success:
@@ -172,6 +172,7 @@ class User:
         # 3) Persist the new balance in MongoDB
         await self.save()
 
+        from utils.sheets_utils import update_user_balance_in_sheet
         # 4) Push balance back to Google Sheets (and roll back on failure)
         success = await update_user_balance_in_sheet(self.telegram_id, self.balance)
         if not success:
