@@ -2,7 +2,7 @@
 
 import logging
 import re
-from datetime import datetime, time as dt_time
+from datetime import datetime
 import pytz
 from telegram.error import BadRequest
 from telegram.constants import ParseMode, ChatAction
