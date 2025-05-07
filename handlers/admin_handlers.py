@@ -84,7 +84,7 @@ def get_menu_kb():
          InlineKeyboardButton(ADD_MENU2_BTN, callback_data="add_menu2")],
         [InlineKeyboardButton(DEL_MENU1_BTN, callback_data="del_menu1"),
          InlineKeyboardButton(DEL_MENU2_BTN, callback_data="del_menu2")],
-        [InlineKeyboardButton(BACK_BTN, callback_data="menu_back")],
+        [InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")],
     ])
 
 def get_admin_kb():
@@ -1018,11 +1018,12 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def cancel_lunch_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the lunch cancellation process."""
+    """Start the lunch cancellation process (admin only)."""
     if not await is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
         return ConversationHandler.END
 
+    # Show a reply‑keyboard with a single “Ortga” button
     await update.message.reply_text(
         "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY‑MM‑DD formatida)\n"
         "Bugungi kun uchun “bugun” deb yozing.",
@@ -1097,17 +1098,16 @@ async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 def register_handlers(app):
-    # ─── Initialize menu collection once ────────────────────────────────
+    # ─── INITIALIZATION ────────────────────────────────────────────────
+    # Initialize menu & users_col once at startup
     app.job_queue.run_once(lambda _: init_collections(), when=0)
 
-    # ─── 1) Plain commands & entry points ────────────────────────────────
+    # ─── 1) CORE COMMANDS & ENTRY POINTS ────────────────────────────────
     app.add_handler(CommandHandler("admin", admin_panel))
-    # right after app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(
-    CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
-    app.add_handler(CommandHandler("notify_all", notify_all))
+    # “Ortga” inside any admin inline flow should also go back to admin_panel
+    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
 
-    # ─── 2) Single‑step buttons from admin keyboard ──────────────────────
+    # ─── 2) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ────────────────────
     single_buttons = [
         (FOYD_BTN,         list_users_exec),
         (ADD_ADMIN_BTN,    start_add_admin),
@@ -1118,26 +1118,32 @@ def register_handlers(app):
         (CARD_BTN,         start_card_management),
         (KASSA_BTN,        show_kassa),
         (MENU_BTN,         menu_panel),
-        (BACK_BTN,         back_to_menu),
+        (BACK_BTN,         back_to_menu),   # this “Ortga” always goes to main menu
     ]
     for text, handler in single_buttons:
-        app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(text)}$"), handler))
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu))
-    # in register_handlers(...)
-    app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
+        app.add_handler(
+            MessageHandler(filters.Regex(f"^{re.escape(text)}$"), handler)
+        )
 
-    # ─── 2.1) Inline callbacks for add/remove/delete admin & users ────────
+    # ─── 2.1) “Ortga” inside admin panel reply keyboard
+    app.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu)
+    )
+    app.add_handler(
+        CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$")
+    )
+
+    # ─── 3) INLINE CALLBACKS: ADD / REMOVE / DELETE USERS ──────────────
     app.add_handler(CallbackQueryHandler(add_admin_callback,    pattern=r"^add_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(delete_user_callback,  pattern=r"^delete_user:\d+$"))
 
-    # ─── 3) Menu management callbacks ────────────────────────────────────
-    menu_pattern = r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1(:.+)?|del_menu2(:.+)?|menu_back)$"
+    # ─── 4) MENU MANAGEMENT INLINE FLOW ────────────────────────────────
+    menu_pattern = r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1|del_menu2|menu_back)$"
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=menu_pattern))
-    # And text handler for adding new menu items
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
 
-    # ─── 4) Lunch cancellation conversation ──────────────────────────────
+    # ─── 5) CANCEL LUNCH CONVERSATION ──────────────────────────────────
     cancel_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_BTN)}$"), cancel_lunch_day)],
         states={
@@ -1164,7 +1170,7 @@ def register_handlers(app):
     )
     app.add_handler(cancel_conv)
 
-    # ─── 5) Card management conversation ────────────────────────────────
+    # ─── 6) CARD MANAGEMENT CONVERSATION ───────────────────────────────
     card_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), start_card_management)],
         states={
@@ -1191,39 +1197,40 @@ def register_handlers(app):
     )
     app.add_handler(card_conv)
 
-    # ─── 6) Price‑setting callbacks ───────────────────────────────────────
+    # ─── 7) PRICE‑SETTING INLINE FLOW ──────────────────────────────────
     price_patterns = [
         r"^set_price:\d+$",
         r"^confirm_price:\d+:\d+$",
         r"^custom_price:\d+$",
-        r"^back_to_price_list$",
+        r"^back_to_admin$",   # use back_to_admin to return to panel
     ]
     for p in price_patterns:
         app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=p))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price))
-    # ─── 7) Notify all conversation ───────────────────────────────────────
+
+    # ─── 8) BROADCAST (/notify_all) CONVERSATION ───────────────────────
     notify_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{notify_all.__doc__.split()[0]}$"), notify_all),
-                    CommandHandler("notify_all", notify_all)],
+        entry_points=[
+            CommandHandler("notify_all", notify_all),
+            MessageHandler(filters.Regex(r"^/notify_all$"), notify_all),
+        ],
         states={
-            S_NOTIFY_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)],
-            S_NOTIFY_CONFIRM: [CallbackQueryHandler(notify_confirm_callback, pattern="^notify_(confirm|cancel)$")],
+            S_NOTIFY_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)
+            ],
+            S_NOTIFY_CONFIRM: [
+                CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
+            ],
         },
         fallbacks=[
-            MessageHandler(filters.Regex(f"^{BACK_BTN}$"), lambda u,c: (c.bot.send_message(u.effective_chat.id, "🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb()), ConversationHandler.END)[1]),
-            CommandHandler("cancel", lambda u,c: (c.bot.send_message(u.effective_chat.id, "🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb()), ConversationHandler.END)[1]),
+            MessageHandler(filters.Regex(f"^{BACK_BTN}$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation),
         ],
         allow_reentry=True,
         per_message=True,
-        name="notify_conversation",
+        name="notify_conversation"
     )
     app.add_handler(notify_conv)
-
-    # ─── 8) Track broadcast responses ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
-
-    # ─── 9) Schedule daily lunch summary ─────────────────────────────────
-    tz = pytz.timezone("Asia/Tashkent")
-    app.job_queue.run_daily(send_summary, time=dt_time(10, 0, tzinfo=tz), name="daily_summary")
 
     logging.info("All admin handlers registered.")
