@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import datetime, time as dt_time
 import pytz
-
+from telegram.error import BadRequest
 from telegram.constants import ParseMode, ChatAction
 from telegram import (
     Update,
@@ -238,9 +238,10 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q    = update.callback_query
+    q = update.callback_query
     await q.answer()
     user = await get_user_async(q.from_user.id)
+    data = q.data
 
     if q.data == "cancel_attendance":
         # cancel
@@ -256,9 +257,18 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await user.set_food_choice(today_str, food)
     await user.add_attendance(today_str, food)
 
-    # confirm
-    await q.message.edit_text(f"✅ {food} tanlandi!")
-    await q.message.reply_text(f"Balansingiz: {user.balance:,.0f} so‘m", reply_markup=get_default_kb(user.is_admin))
+    # Safely edit the inline message:
+    try:
+        await q.message.edit_text(f"✅ {food} tanlandi!")
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            raise
+
+    # Then send the follow‑up
+    await q.message.reply_text(
+        f"Balansingiz: {user.balance:,} so‘m",
+        reply_markup=get_default_kb(user.is_admin)
+    )
 
 
 # ─── CANCEL LUNCH ──────────────────────────────
