@@ -26,7 +26,6 @@ from utils.sheets_utils import get_worksheet, update_user_balance_in_sheet, sync
 from utils import get_all_users_async, get_user_async, is_admin, get_default_kb
 from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
-from handlers.user_handlers import check_debts
 
 menu_col = None
 users_col = None
@@ -1109,6 +1108,7 @@ async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 async def test_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from handlers.user_handlers import check_debts
     await update.message.reply_text("🚀 Testing debt check…")
     await check_debts(context)
     await update.message.reply_text("✅ Done.")
