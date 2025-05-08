@@ -54,7 +54,9 @@ YES, NO     = "att_yes", "att_no"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
     if not user:
-        await update.message.reply_text("Ismingizni kiriting:", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(
+            "Ismingizni kiriting:", reply_markup=ReplyKeyboardRemove()
+        )
         return NAME
 
     kb = get_default_kb(user.is_admin)
@@ -78,12 +80,20 @@ async def register_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PHONE
 
 async def register_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.contact.phone_number if update.message.contact else update.message.text
+    phone = (
+        update.message.contact.phone_number
+        if update.message.contact
+        else update.message.text
+    )
     if not validate_phone(phone):
         await update.message.reply_text("Raqam noto'g'ri. Qaytadan kiriting:")
         return PHONE
 
-    user = await User.create(update.effective_user.id, context.user_data["name"], phone)
+    user = await User.create(
+        update.effective_user.id,
+        context.user_data["name"],
+        phone
+    )
     kb = get_default_kb(user.is_admin)
     await update.message.reply_text(
         f"Ro'yxatdan o'tish yakunlandi. Balans: {user.balance:,.0f} so'm.",
@@ -94,7 +104,9 @@ async def register_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── NAME CHANGE ──────────────────────────────
 async def change_name_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Yangi ismingizni kiriting:", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(
+        "Yangi ismingizni kiriting:", reply_markup=ReplyKeyboardRemove()
+    )
     return CHANGE_NAME
 
 async def change_name_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,7 +118,9 @@ async def change_name_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
     await user.change_name(new_name)
     kb = get_default_kb(user.is_admin)
-    await update.message.reply_text(f"Ismingiz muvaffaqiyatli o'zgardi: {new_name}", reply_markup=kb)
+    await update.message.reply_text(
+        f"Ismingiz muvaffaqiyatli o'zgardi: {new_name}", reply_markup=kb
+    )
     return ConversationHandler.END
 
 
@@ -134,36 +148,58 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     user  = await get_user_async(tg_id)
     if not user:
-        return await update.message.reply_text("Iltimos, avval /start bilan ro'yxatdan o'ting.")
+        return await update.message.reply_text(
+            "Iltimos, avval /start bilan ro'yxatdan o'ting."
+        )
 
+    # Tell them we're working
     await update.message.reply_text("⏳ Balans tekshirilmoqda...")
-    # keep them aware:
-    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING
+    )
+
     try:
         sheet_record = await find_user_in_sheet(tg_id)
         if sheet_record and "balance" in sheet_record:
             bal = float(str(sheet_record["balance"]).replace(",", ""))
             if bal != user.balance:
                 users = await get_collection("users")
-                await users.update_one({"telegram_id": tg_id}, {"$set": {"balance": bal}})
+                await users.update_one(
+                    {"telegram_id": tg_id},
+                    {"$set": {"balance": bal}}
+                )
                 user.balance = bal
     except Exception as e:
         logger.error(f"Error fetching balance from sheet: {e}")
 
-    await update.message.reply_text(f"Balansingiz: {user.balance:,.0f} so'm.")
+    await update.message.reply_text(
+        f"Balansingiz: {user.balance:,.0f} so'm."
+    )
 
 
 async def attendance_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
     hist = user.attendance
-    text = "Qatnashgan kunlar:\n" + "\n".join(hist) if hist else "Hech qanday qatnashuv yo'q."
+    text = (
+        "Qatnashgan kunlar:\n" + "\n".join(hist)
+        if hist else
+        "Hech qanday qatnashuv yo'q."
+    )
     await update.message.reply_text(text)
 
 async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
     txs  = user.transactions
-    lines = [f"{t['date'][:10]}: {t['desc']} ({t['amount']} so'm)" for t in txs[-20:]]
-    text  = "To'lovlar tarixi:\n" + "\n".join(lines) if lines else "Hech qanday tranzaksiya yo'q."
+    lines = [
+        f"{t['date'][:10]}: {t['desc']} ({t['amount']} so'm)"
+        for t in txs[-20:]
+    ]
+    text  = (
+        "To'lovlar tarixi:\n" + "\n".join(lines)
+        if lines else
+        "Hech qanday tranzaksiya yo'q."
+    )
     await update.message.reply_text(text)
 
 
@@ -184,7 +220,9 @@ async def show_card_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
     if not user:
-        return await update.message.reply_text("Iltimos, avval /start bilan ro'yxatdan o'ting.")
+        return await update.message.reply_text(
+            "Iltimos, avval /start bilan ro'yxatdan o'ting."
+        )
 
     tz = pytz.timezone("Asia/Tashkent")
     today_wd = datetime.now(tz).weekday()
@@ -195,79 +233,102 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb = [[InlineKeyboardButton(i, callback_data=f"food:{i}")] for i in items]
     kb.append([InlineKeyboardButton("🔙 Ortga", callback_data="cancel_attendance")])
-    await update.message.reply_text("Bugungi taomlar:", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(
+        "Bugungi taomlar:", reply_markup=InlineKeyboardMarkup(kb)
+    )
 
 
 async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q        = update.callback_query
+    q    = update.callback_query
     await q.answer()
-    user     = await get_user_async(q.from_user.id)
-    tz       = pytz.timezone("Asia/Tashkent")
-    today_dt = datetime.now(tz)
-    today_str= today_dt.strftime("%Y-%m-%d")
+    user = await get_user_async(q.from_user.id)
+    tz   = pytz.timezone("Asia/Tashkent")
+    today_str = datetime.now(tz).strftime("%Y-%m-%d")
 
+    # ─── NO branch ─────────────────────────────────────
     if q.data == NO:
         if today_str in user.attendance:
             await user.remove_attendance(today_str)
         await user.decline_attendance(today_str)
-        kb = get_default_kb(user.is_admin)
-        await q.message.edit_text("❌ Bugungi tushlik rad etildi.", reply_markup=kb)
-        return
 
-    if today_str in user.attendance:
-        kb = get_default_kb(user.is_admin, has_food_selection=False)
-        await q.message.edit_text(
-            f"⚠️ Allaqachon ro'yxatdasiz. Balans: {user.balance:,.0f} so'm.",
+        # 1) clear inline
+        await q.message.edit_text("❌ Bugungi tushlik rad etildi.")
+
+        # 2) send fresh reply‐keyboard
+        kb = get_default_kb(user.is_admin)
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text="Nimani xohlaysiz?",
             reply_markup=kb
         )
         return
 
+    # ─── already said YES ──────────────────────────────
+    if today_str in user.attendance:
+        # remove inline menu
+        await q.message.edit_text(
+            f"⚠️ Allaqachon ro'yxatdasiz. Balans: {user.balance:,.0f} so'm."
+        )
+        # then fresh keyboard
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text="Nimani xohlaysiz?",
+            reply_markup=get_default_kb(user.is_admin)
+        )
+        return
+
+    # ─── YES first time → show foods ─────────────────
     if today_str in user.declined_days:
         await user.remove_decline(today_str)
 
-    tz        = pytz.timezone("Asia/Tashkent")
-    today_wd  = datetime.now(tz).weekday()
-    menu_name = "menu1" if today_wd in (0,2,4) else "menu2"
-    # show food options
-    menu_col  = await get_collection("menu")
-    doc       = await menu_col.find_one({"name": menu_name})
-    foods     = doc.get("items", [])
+    tz       = pytz.timezone("Asia/Tashkent")
+    wd       = datetime.now(tz).weekday()
+    menu_name= "menu1" if wd in (0,2,4) else "menu2"
+    menu_col = await get_collection("menu")
+    doc      = await menu_col.find_one({"name": menu_name})
+    foods    = doc.get("items", [])
+
     kb = [[InlineKeyboardButton(f, callback_data=f"food:{f}")] for f in foods]
     kb.append([InlineKeyboardButton("🔙 Ortga", callback_data="cancel_attendance")])
-    await q.message.edit_text("🍽 Iltimos, taom tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+    await q.message.edit_text(
+        "🍽 Iltimos, taom tanlang:",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
 
 async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+    q    = update.callback_query
     await q.answer()
     user = await get_user_async(q.from_user.id)
-    data = q.data
 
     if q.data == "cancel_attendance":
-        # cancel
+        # clear inline
         await q.message.edit_text("✅ Bekor qilindi.")
-        await q.message.reply_text("Nimani xohlaysiz?", reply_markup=get_default_kb(user.is_admin))
+        # fresh reply‐keyboard
+        await q.message.reply_text(
+            "Nimani xohlaysiz?",
+            reply_markup=get_default_kb(user.is_admin)
+        )
         return
 
+    # record choice
     food = q.data.split(":",1)[1]
     tz = pytz.timezone("Asia/Tashkent")
     today_str = datetime.now(tz).strftime("%Y-%m-%d")
-
-    # record
     await user.set_food_choice(today_str, food)
     await user.add_attendance(today_str, food)
 
-    # Safely edit the inline message:
+    # clear or edit inline safely
     try:
         await q.message.edit_text(f"✅ {food} tanlandi!")
     except BadRequest as e:
         if "Message is not modified" not in str(e):
             raise
 
-    # Then send the follow‑up
+    # then show balance and reply‑keyboard
     await q.message.reply_text(
         f"Balansingiz: {user.balance:,} so‘m",
-        reply_markup=get_default_kb(user.is_admin)
+        reply_markup= get_default_kb(user.is_admin)
     )
 
 
@@ -302,7 +363,11 @@ async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("Yo'q", callback_data=NO)]
     ])
     for u in await get_all_users_async():
-        await context.bot.send_message(u.telegram_id, "Bugun tushlikka borasizmi?", reply_markup=kb)
+        await context.bot.send_message(
+            chat_id=u.telegram_id,
+            text="Bugun tushlikka borasizmi?",
+            reply_markup=kb
+        )
 
 async def check_debts(context: ContextTypes.DEFAULT_TYPE):
     for u in await get_all_users_async():
@@ -327,7 +392,7 @@ async def admin_button_entry(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ─── REGISTER HANDLERS ────────────────────────
 def register_handlers(app):
-    # registration
+    # /start registration
     reg = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -348,7 +413,7 @@ def register_handlers(app):
     )
     app.add_handler(name_conv)
 
-    # core
+    # core commands
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("attendance", attendance_history))
@@ -356,15 +421,20 @@ def register_handlers(app):
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("cancel_lunch", cancel_lunch))
 
-    # shortcuts
+    # reply‑keyboard shortcuts
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BAL_BTN)}$"), balance))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(NAME_BTN)}$"), change_name_start))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(CXL_BTN)}$"), cancel_lunch))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), show_card_info))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(ADMIN_BTN)}$"), admin_panel))
 
-    # inline
+    # inline callbacks
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{YES}$"))
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{NO}$"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^food:"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^cancel_attendance$"))
+
+    # scheduled jobs
+    tz = pytz.timezone("Asia/Tashkent")
+    app.job_queue.run_daily(morning_prompt, time=dt_time(7,0,tzinfo=tz), days=(0,1,2,3,4), name="morning_survey")
+    app.job_queue.run_daily(check_debts,     time=dt_time(12,0,tzinfo=tz), days=(1,3,5),       name="debt_check")
