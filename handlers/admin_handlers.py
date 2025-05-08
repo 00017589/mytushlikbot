@@ -26,6 +26,7 @@ from utils.sheets_utils import get_worksheet, update_user_balance_in_sheet, sync
 from utils import get_all_users_async, get_user_async, is_admin, get_default_kb
 from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
+from handlers.user_handlers import check_debts
 
 menu_col = None
 users_col = None
@@ -953,12 +954,9 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 9) NOTIFY ALL ─────────────────────────────────────────────────────────────
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the broadcast flow (admin only)."""
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
-        await update.message.reply_text("❌ Siz admin emassiz.")
-        return ConversationHandler.END
-
+        return await update.message.reply_text("❌ Siz admin emassiz.")
     await update.message.reply_text(
         "⚠️ Yuboriladigan xabarni kiriting yoki Ortga bosing:",
         reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
@@ -971,16 +969,7 @@ async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return ConversationHandler.END
 
-    if len(text) > 4000:
-        await update.message.reply_text(
-            "❌ Xabar juda uzun. Iltimos, 4000 belgidan kamroq matn kiriting.",
-            reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
-        )
-        return S_NOTIFY_MESSAGE
-
     context.user_data['notify_message'] = text
-
-    # Confirmation buttons
     confirm_kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Ha, yubor", callback_data="notify_confirm")],
         [InlineKeyboardButton("❌ Bekor qil", callback_data="notify_cancel")],
@@ -994,36 +983,31 @@ async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TY
 async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data == "notify_cancel":
-        # Cancel and back to panel
         await query.message.edit_text("❌ Xabar yuborish bekor qilindi.")
         await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return ConversationHandler.END
 
-    # Otherwise it's "notify_confirm"
-    message = context.user_data.get('notify_message', '')
+    # confirmed path
+    message = context.user_data['notify_message']
     users = await get_all_users_async()
-
     await query.message.edit_text("⏳ Xabar yuborilmoqda…")
-    sent, failed = 0, []
-
+    sent = failed = 0
     for u in users:
-        if u.is_admin:
-            continue
-        try:
-            await context.bot.send_message(u.telegram_id, message)
-            sent += 1
-        except Exception:
-            failed.append(u.telegram_id)
+        if not u.is_admin:
+            try:
+                await context.bot.send_message(u.telegram_id, message)
+                sent += 1
+            except:
+                failed += 1
 
-    summary = f"✅ {sent}/{len(users)} foydalanuvchiga yuborildi."
+    summary = f"✅ {sent}/{len([u for u in users if not u.is_admin])} foydalanuvchiga yuborildi."
     if failed:
-        summary += f"\n⚠️ {len(failed)} kishi ololmadi."
-
+        summary += f"\n⚠️ {failed} kishi ololmadi."
     await query.message.edit_text(summary)
     await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
     return ConversationHandler.END
+
 
 # ─── CONVERSATION HANDLERS ──────────────────────────────────────────────────────
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1124,6 +1108,11 @@ async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return ConversationHandler.END
 
+async def test_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚀 Testing debt check…")
+    await check_debts(context)
+    await update.message.reply_text("✅ Done.")
+
 def register_handlers(app):
     # ─── INITIALIZATION ────────────────────────────────────────────────
     # Initialize menu & users_col once at startup
@@ -1133,6 +1122,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("admin", admin_panel))
     # “Ortga” inside any admin inline flow should also go back to admin_panel
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
+    app.add_handler(CommandHandler("test_debts", test_debts_command))
 
     # ─── 2) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ────────────────────
     single_buttons = [
@@ -1237,20 +1227,20 @@ def register_handlers(app):
 
     # ─── 8) BROADCAST (/notify_all) CONVERSATION ───────────────────────
     notify_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("notify_all", notify_all),
-            MessageHandler(filters.Regex(r"^/notify_all$"), notify_all),
-        ],
+        entry_points=[ CommandHandler("notify_all", notify_all) ],
         states={
             S_NOTIFY_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_notify_message)
+                MessageHandler(
+                    filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"),
+                    handle_notify_message
+                )
             ],
             S_NOTIFY_CONFIRM: [
                 CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
             ],
         },
         fallbacks=[
-            MessageHandler(filters.Regex(f"^{BACK_BTN}$"), cancel_conversation),
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
             CommandHandler("cancel", cancel_conversation),
         ],
         allow_reentry=True,
