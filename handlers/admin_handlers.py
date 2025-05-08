@@ -57,6 +57,7 @@ CARD_BTN         = "Karta Ma’lumotlari"
 MENU_BTN         = "🍽 Menyu"
 BACK_BTN         = "Ortga"
 KASSA_BTN        = "Kassa"
+NOTIFY_BTN = "📣 Notify All"
 
 # ─── MENU SUB‑BUTTONS ──────────────────────────────────────────────────────────
 VIEW_MENU1_BTN = "1‑Menuni Ko‘rish"
@@ -93,7 +94,7 @@ def get_admin_kb():
         [ADD_ADMIN_BTN, REMOVE_ADMIN_BTN],
         [DAILY_PRICE_BTN, DELETE_USER_BTN],
         [CXL_LUNCH_BTN, CARD_BTN],
-        [KASSA_BTN],   
+        [KASSA_BTN, NOTIFY_BTN],   
         [BACK_BTN],
     ], resize_keyboard=True)  
 
