@@ -1236,28 +1236,40 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price))
 
     # ─── 8) BROADCAST (/notify_all) CONVERSATION ───────────────────────
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(NOTIFY_BTN)}$"), notify_all))
-    notify_conv = ConversationHandler(
-        entry_points=[ CommandHandler("notify_all", notify_all) ],
-        states={
-            S_NOTIFY_MESSAGE: [
-                MessageHandler(
-                    filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"),
-                    handle_notify_message
-                )
-            ],
-            S_NOTIFY_CONFIRM: [
-                CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
-            ],
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-        ],
-        allow_reentry=True,
-        per_message=True,
-        name="notify_conversation"
+    app.add_handler(
+    MessageHandler(
+        filters.Regex(fr"^{re.escape(NOTIFY_BTN)}$"),
+        notify_all
     )
+)
+    notify_conv = ConversationHandler(
+    entry_points=[
+        CommandHandler("notify_all", notify_all),
+        MessageHandler(filters.Regex(fr"^{re.escape(NOTIFY_BTN)}$"), notify_all),
+    ],
+    states={
+        S_NOTIFY_MESSAGE: [
+            MessageHandler(
+                filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"),
+                handle_notify_message
+            )
+        ],
+        S_NOTIFY_CONFIRM: [
+            CallbackQueryHandler(
+                notify_confirm_callback,
+                pattern=r"^notify_(confirm|cancel)$"
+            )
+        ],
+    },
+    fallbacks=[
+        MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
+        CommandHandler("cancel", cancel_conversation),
+    ],
+    allow_reentry=True,
+    per_message=True,
+    name="notify_conversation",
+)
+
     app.add_handler(notify_conv)
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
 
