@@ -954,6 +954,7 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── 9) NOTIFY ALL ─────────────────────────────────────────────────────────────
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("notify_all called")
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
         return await update.message.reply_text("❌ Siz admin emassiz.")
@@ -981,6 +982,7 @@ async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TY
     return S_NOTIFY_CONFIRM
 
 async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("callback data:", update.callback_query.data)
     query = update.callback_query
     await query.answer()
     if query.data == "notify_cancel":
