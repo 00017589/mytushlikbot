@@ -193,6 +193,14 @@ class User:
             self.declined_days.remove(date_str)
             await self.save()
 
+    async def get_food_choice(self, date: str) -> str | None:
+        """
+        Returns the recorded food choice for this user on `date`,
+        or None if they didn’t pick one.
+        """
+        col = await get_collection("daily_food_choices")
+        doc = await col.find_one({"telegram_id": self.telegram_id, "date": date})
+        return doc.get("food_choice") if doc else None
     @staticmethod
     async def cleanup_old_food_choices():
         tz = pytz.timezone("Asia/Tashkent")
