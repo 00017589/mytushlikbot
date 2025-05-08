@@ -1236,12 +1236,6 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price))
 
     # ─── 8) BROADCAST (/notify_all) CONVERSATION ───────────────────────
-    app.add_handler(
-    MessageHandler(
-        filters.Regex(fr"^{re.escape(NOTIFY_BTN)}$"),
-        notify_all
-    )
-)
     notify_conv = ConversationHandler(
     entry_points=[
         CommandHandler("notify_all", notify_all),
