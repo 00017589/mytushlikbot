@@ -1114,6 +1114,14 @@ async def test_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await check_debts(context)
     await update.message.reply_text("✅ Done.")
 
+async def run_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update.effective_user.id):
+        return await update.message.reply_text("❌ Siz admin emassiz!")
+    await update.message.reply_text("⏳ Today’s summary being sent…")
+    # reuse send_summary logic
+    await send_summary(context)
+    return ConversationHandler.END
+
 def register_handlers(app):
     # ─── INITIALIZATION ────────────────────────────────────────────────
     # Initialize menu & users_col once at startup
@@ -1121,6 +1129,7 @@ def register_handlers(app):
 
     # ─── 1) CORE COMMANDS & ENTRY POINTS ────────────────────────────────
     app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("run_summary", run_summary_command))
     # “Ortga” inside any admin inline flow should also go back to admin_panel
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
     app.add_handler(CommandHandler("test_debts", test_debts_command))
