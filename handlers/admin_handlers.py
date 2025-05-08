@@ -57,7 +57,7 @@ CARD_BTN         = "Karta Ma’lumotlari"
 MENU_BTN         = "🍽 Menyu"
 BACK_BTN         = "Ortga"
 KASSA_BTN        = "Kassa"
-NOTIFY_BTN = "📣 Notify All"
+NOTIFY_BTN = "📣 Xabar"
 
 # ─── MENU SUB‑BUTTONS ──────────────────────────────────────────────────────────
 VIEW_MENU1_BTN = "1‑Menuni Ko‘rish"
@@ -1227,6 +1227,7 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price))
 
     # ─── 8) BROADCAST (/notify_all) CONVERSATION ───────────────────────
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(NOTIFY_BTN)}$"), notify_all))
     notify_conv = ConversationHandler(
         entry_points=[ CommandHandler("notify_all", notify_all) ],
         states={
