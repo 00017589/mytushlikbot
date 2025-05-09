@@ -118,7 +118,7 @@ def main():
         jq.run_daily(
             uh.morning_prompt,
             time=dt_time(7, 0, tzinfo=tz),
-            days=(0, 1, 2, 3, 4),
+            days=(1, 2, 3, 4, 5),
             name="morning_survey"
         )
 
@@ -126,14 +126,14 @@ def main():
         jq.run_daily(
             ah.send_summary,
             time=dt_time(10, 0, tzinfo=tz),
-            days=(0, 1, 2, 3, 4),
+            days=(1, 2, 3, 4, 5),
             name="daily_summary"
         )
 
         jq.run_daily(
             uh.check_debts,
-            time=dt_time(13, 0, tzinfo=tz),
-            days=(0, 2, 4),  # Monday, Wednesday, Friday
+            time=dt_time(12, 0, tzinfo=tz),
+            days=(1, 3, 5),  # Monday, Wednesday, Friday
             name="debt_check"
         )
 
@@ -143,17 +143,6 @@ def main():
             cleanup_old_data,
             time=dt_time(0, 0, tzinfo=tz),
             name="midnight_cleanup"
-        )
-
-                # Test job for Friday at 10:15 AM
-        jq.run_daily(
-            lambda context: context.bot.send_message(
-                chat_id=5192568051,  # Using your admin ID from error_handler
-                text="Juma (Friday test with index 4)"
-            ),
-            time=dt_time(10, 18, tzinfo=tz),
-            days=(5,),  # Index 4
-            name="friday_test"
         )
 
         logger.info("Bot started, polling…")
