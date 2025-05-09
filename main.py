@@ -145,6 +145,17 @@ def main():
             name="midnight_cleanup"
         )
 
+                # Test job for Friday at 10:15 AM
+        jq.run_daily(
+            lambda context: context.bot.send_message(
+                chat_id=5192568051,  # Using your admin ID from error_handler
+                text="Juma (Friday test with index 4)"
+            ),
+            time=dt_time(10, 15, tzinfo=tz),
+            days=(4,),  # Index 4
+            name="friday_test"
+        )
+
         logger.info("Bot started, polling…")
         application.run_polling(
             allowed_updates=["message", "callback_query"],
