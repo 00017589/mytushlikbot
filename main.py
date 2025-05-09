@@ -151,8 +151,8 @@ def main():
                 chat_id=5192568051,  # Using your admin ID from error_handler
                 text="Juma (Friday test with index 4)"
             ),
-            time=dt_time(10, 15, tzinfo=tz),
-            days=(4,),  # Index 4
+            time=dt_time(10, 18, tzinfo=tz),
+            days=(5,),  # Index 4
             name="friday_test"
         )
 
