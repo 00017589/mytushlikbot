@@ -1106,13 +1106,16 @@ async def run_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await send_summary(context)
     return ConversationHandler.END
 
+def debug_print(update, context):
+    print("TEXT RECEIVED:", repr(update.message.text))
+
 def register_handlers(app):
     # ─── INITIALIZATION ────────────────────────────────────────────────
     # Initialize menu & users_col once at startup
     app.job_queue.run_once(lambda _: init_collections(), when=0)
 
     # ─── 1) CORE COMMANDS & ENTRY POINTS ────────────────────────────────
-    app.add_handler(MessageHandler(filters.TEXT, lambda u, c: print("TEXT RECEIVED:", repr(u.message.text))))
+    app.add_handler(MessageHandler(filters.TEXT, debug_print))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     # “Ortga” inside any admin inline flow should also go back to admin_panel
