@@ -1119,7 +1119,7 @@ def register_handlers(app):
     notify_conv = ConversationHandler(
         entry_points=[
             CommandHandler("notify_all", notify_all),
-            MessageHandler(filters.Regex(fr"^{re.escape(NOTIFY_BTN)}$"), notify_all),
+            MessageHandler(filters.TEXT & filters.Regex("Xabar"), notify_all),
         ],
         states={
             S_NOTIFY_MESSAGE: [
