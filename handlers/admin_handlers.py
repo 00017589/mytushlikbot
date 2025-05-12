@@ -57,7 +57,7 @@ CARD_BTN         = "Karta Ma’lumotlari"
 MENU_BTN         = "🍽 Menyu"
 BACK_BTN         = "Ortga"
 KASSA_BTN        = "Kassa"
-NOTIFY_BTN       = "📣 Xabar Yuborish"
+NOTIFY_BTN       = "Xabar Yuborish"
 
 # ─── MENU SUB‑BUTTONS ──────────────────────────────────────────────────────────
 VIEW_MENU1_BTN = "1‑Menuni Ko‘rish"
