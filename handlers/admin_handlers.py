@@ -57,7 +57,7 @@ CARD_BTN         = "Karta Ma’lumotlari"
 MENU_BTN         = "🍽 Menyu"
 BACK_BTN         = "Ortga"
 KASSA_BTN        = "Kassa"
-NOTIFY_BTN = "📣 Xabar"
+NOTIFY_BTN       = "📣 Xabar Yuborish"
 
 # ─── MENU SUB‑BUTTONS ──────────────────────────────────────────────────────────
 VIEW_MENU1_BTN = "1‑Menuni Ko‘rish"
@@ -847,24 +847,6 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(u.telegram_id, admin_text, parse_mode=ParseMode.MARKDOWN)
             except Exception as e:
                 logger.error(f"Failed sending summary to admin {u.telegram_id}: {e}")
-
-    # deduct balances and update Sheets
-    for u in attendees:
-        try:
-            # deduct in model, persist, then sync to Sheets
-            u.balance -= u.daily_price
-            await u._record_txn("lunch", -u.daily_price, f"Tushlik {today}")
-            await u.save()
-
-            success = await update_user_balance_in_sheet(u.telegram_id, u.balance)
-            if not success:
-                # rollback
-                u.balance += u.daily_price
-                await u._record_txn("rollback", u.daily_price, f"Rollback {today}")
-                await u.save()
-                logger.error(f"Rollback applied for {u.telegram_id} after Sheets failure")
-        except Exception as e:
-            logger.error(f"Error deducting for {u.telegram_id}: {e}")
 
     # notify each attendee
     for u in attendees:
