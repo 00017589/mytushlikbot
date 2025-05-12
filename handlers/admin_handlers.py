@@ -1112,6 +1112,7 @@ def register_handlers(app):
     app.job_queue.run_once(lambda _: init_collections(), when=0)
 
     # ─── 1) CORE COMMANDS & ENTRY POINTS ────────────────────────────────
+    app.add_handler(MessageHandler(filters.TEXT, lambda u, c: print("TEXT RECEIVED:", repr(u.message.text))))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     # “Ortga” inside any admin inline flow should also go back to admin_panel
