@@ -53,7 +53,7 @@ async def update_user_balance_in_sheet(telegram_id: int, new_balance: float) -> 
         return False
     try:
         cell = ws.find(str(telegram_id))
-        ws.update_cell(cell.row, 4, new_balance)
+        ws.update_cell(cell.row, 3, new_balance)
         return True
     except Exception:
         return False
