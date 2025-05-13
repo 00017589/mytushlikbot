@@ -355,6 +355,11 @@ async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.now(tz)
+    today = now.strftime("%Y-%m-%d")
+    cancelled = await get_collection("cancelled_lunches")
+    if await cancelled.find_one({"date": today}):
+        # do nothing today
+        return
     if now.weekday() >= 5:
         return
 
