@@ -129,3 +129,14 @@ async def sync_balances_incremental():
 
     # return list of updated IDs
     return [tg for tg, _ in updates]
+
+async def get_price_from_sheet(telegram_id: int) -> float:
+    """
+    Look up the row for this telegram_id in column B and return
+    the 'daily_price' from column E.
+    """
+    ws = await get_worksheet()
+    # find returns a Cell with .row
+    cell = ws.find(str(telegram_id), in_column=2)
+    raw = ws.cell(cell.row, 5).value  # column E is index 5 (1-based)
+    return float(raw.replace(',', '').strip())
