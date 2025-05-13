@@ -962,82 +962,84 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def cancel_lunch_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the lunch cancellation process (admin only)."""
+    """Start the lunch cancellation process"""
     if not await is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
-        return ConversationHandler.END
+        await update.message.reply_text("Bu buyruq faqat adminlar uchun.")
+        return
 
-    # Show a reply‑keyboard with a single “Ortga” button
     await update.message.reply_text(
-        "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY‑MM‑DD formatida)\n"
-        "Bugungi kun uchun “bugun” deb yozing.",
-        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+        "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY-MM-DD formatida)\n"
+        "Bugungi kun uchun bo'lsa, 'bugun' deb yozing."
     )
     return S_CANCEL_DATE
 
 async def handle_cancel_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the date input for lunch cancellation."""
-    text = update.message.text.strip().lower()
-    if text == BACK_BTN:
-        return await cancel_conversation(update, context)
-
-    if text == "bugun":
+    """Handle the date input for lunch cancellation"""
+    date_input = update.message.text.strip().lower()
+    
+    if date_input == "bugun":
         tz = pytz.timezone("Asia/Tashkent")
-        date_str = datetime.now(tz).strftime("%Y-%m-%d")
+        date_str = datetime.datetime.now(tz).strftime("%Y-%m-%d")
     else:
         try:
-            datetime.strptime(text, "%Y-%m-%d")
-            date_str = text
+            # Validate date format
+            datetime.datetime.strptime(date_input, "%Y-%m-%d")
+            date_str = date_input
         except ValueError:
             await update.message.reply_text(
-                "❌ Noto‘g‘ri format. Iltimos, YYYY‑MM‑DD yoki “bugun”.",
-                reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+                "Noto'g'ri format. Iltimos, YYYY-MM-DD formatida yoki 'bugun' deb yozing."
             )
             return S_CANCEL_DATE
 
     context.user_data['cancel_date'] = date_str
-    await update.message.reply_text(
-        f"{date_str} uchun sababni kiriting:",
-        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
-    )
+    await update.message.reply_text("Bekor qilish sababini kiriting:")
     return S_CANCEL_REASON
 
 async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the reason and process the cancellation."""
-    text = update.message.text.strip()
-    if text == BACK_BTN:
-        return await cancel_conversation(update, context)
-
+    """Handle the reason input and process the cancellation"""
+    reason = update.message.text.strip()
     date_str = context.user_data.get('cancel_date')
+    
     if not date_str:
-        await update.message.reply_text("❌ Xatolik yuz berdi. Iltimos, qaytadan boshlang.")
+        await update.message.reply_text("Xatolik yuz berdi. Iltimos, qaytadan boshlang.")
         return ConversationHandler.END
 
+    # Process cancellation
     users = await get_all_users_async()
-    affected = []
-    for u in users:
-        if date_str in getattr(u, 'attendance', []):
-            u.balance += u.daily_price
-            await u._record_txn("refund", u.daily_price, f"Bekor: {date_str}")
-            u.attendance.remove(date_str)
-            u.food_choices.pop(date_str, None)
-            await u.save()
-            affected.append(u)
+    affected_users = []
+    
+    for user in users:
+        if date_str in user.attendance:
+            # Refund the user
+            user.balance += user.daily_price
+            user._record_txn("refund", user.daily_price, f"Lunch cancellation on {date_str}")
+            # Remove attendance
+            user.attendance.remove(date_str)
+            if date_str in user.food_choices:
+                del user.food_choices[date_str]
+            await user.save()
+            affected_users.append(user)
 
-    for u in users:
-        msg = f"⚠️ {date_str} kuni tushlik bekor qilindi.\nSabab: {text}"
-        if u in affected:
-            msg += f"\nBalansingizga {u.daily_price:,} so‘m qaytarildi."
+    # Send notifications
+    for user in users:
         try:
-            await context.bot.send_message(u.telegram_id, msg)
+            message = (
+                f"⚠️ Eslatma: {date_str} kuni tushlik bekor qilindi.\n"
+                f"Sabab: {reason}\n"
+            )
+            if user in affected_users:
+                message += f"Balansingizga {user.daily_price} so'm qaytarildi."
+            
+            await context.bot.send_message(user.telegram_id, message)
         except:
-            logger.warning(f"Could not notify {u.telegram_id}")
+            pass
 
+    # Clear user data
     context.user_data.pop('cancel_date', None)
+    
     await update.message.reply_text(
         f"✅ {date_str} uchun tushlik bekor qilindi.\n"
-        f"Jami {len(affected)} ta foydalanuvchi ta'sirlandi.",
-        reply_markup=get_admin_kb()
+        f"Jami {len(affected_users)} ta foydalanuvchi ta'sirlandi."
     )
     return ConversationHandler.END
 
