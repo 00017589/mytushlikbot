@@ -1115,20 +1115,10 @@ def register_handlers(app):
     cancel_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_BTN)}$"), cancel_lunch_day)],
         states={
-            S_CANCEL_DATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_date)
-            ],
-            S_CANCEL_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_reason)
-            ],
+            S_CANCEL_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_date)],
+            S_CANCEL_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_reason)],
         },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-        ],
-        allow_reentry=True,
-        per_message=True,
-        name="cancel_lunch_conversation"
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     app.add_handler(cancel_conv)
 
