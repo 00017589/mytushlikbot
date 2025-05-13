@@ -6,10 +6,10 @@ import asyncio
 import tempfile
 import atexit
 from datetime import time as dt_time
-import datetime
+from datetime import datetime
 import pytz
 
-# Cross‑platform file locking
+# Cross-platform file locking
 if os.name == 'nt':
     import msvcrt
 else:
@@ -21,7 +21,6 @@ from telegram.ext import ApplicationBuilder
 from database import init_db
 from config import BOT_TOKEN, MONGODB_URI
 from models.user_model import User
-# Register handlers
 import handlers.user_handlers as uh
 import handlers.admin_handlers as ah
 
@@ -77,12 +76,14 @@ async def cleanup_old_data(context):
     logger.info("Cleanup done.")
 
 def main():
-    # Single‑instance guard
+    # Single-instance guard
     lock_fd = check_single_instance()
 
     # Load env
     load_dotenv()
-    if not os.getenv("BOT_TOKEN", BOT_TOKEN) or not os.getenv("MONGODB_URI", MONGODB_URI):
+    token = os.getenv("BOT_TOKEN", BOT_TOKEN)
+    mongo_uri = os.getenv("MONGODB_URI", MONGODB_URI)
+    if not token or not mongo_uri:
         logger.error("Missing BOT_TOKEN or MONGODB_URI")
         sys.exit(1)
 
@@ -98,7 +99,7 @@ def main():
         # Build app
         application = (
             ApplicationBuilder()
-            .token(os.getenv("BOT_TOKEN", BOT_TOKEN))
+            .token(token)
             .connect_timeout(30.0)
             .read_timeout(30.0)
             .write_timeout(30.0)
@@ -107,8 +108,15 @@ def main():
         )
         application.add_error_handler(error_handler)
 
+        # Register handlers
         uh.register_handlers(application)
         ah.register_handlers(application)
+
+        # ─── Delete any existing webhook ────────────────────────────────────
+        # Telegram will refuse getUpdates if a webhook is still set.
+        loop.run_until_complete(
+            application.bot.delete_webhook(drop_pending_updates=True)
+        )
 
         # Schedule jobs
         jq = application.job_queue
@@ -130,13 +138,13 @@ def main():
             name="daily_summary"
         )
 
+        # Debt check Mon/Wed/Fri at 12:00
         jq.run_daily(
             uh.check_debts,
             time=dt_time(12, 0, tzinfo=tz),
-            days=(1, 3, 5),  # Monday, Wednesday, Friday
+            days=(1, 3, 5),
             name="debt_check"
         )
-
 
         # Midnight cleanup
         jq.run_daily(
