@@ -198,13 +198,13 @@ async def attendance_history(update: Update, context: ContextTypes.DEFAULT_TYPE)
     recent.sort(reverse=True)
 
     if not recent:
-        text = "⏳ So‘nggi ikki oy ichida qatnashuvingiz yo‘q."
+        text = "⏳ So‘nggi bir oy ichida qatnashuvingiz yo‘q."
     else:
         lines = [
             f"{i+1}. {datetime.strptime(d, '%Y-%m-%d').strftime('%d.%m.%Y')}"
             for i, d in enumerate(recent)
         ]
-        text = "🗓️ Siz qatnashgan kunlar (oxirgi 2 oy):\n\n" + "\n".join(lines)
+        text = "🗓️ Siz qatnashgan kunlar (oxirgi 1 oy):\n\n" + "\n".join(lines)
 
     await update.message.reply_text(
         text,
