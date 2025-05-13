@@ -48,6 +48,11 @@ HISTORY_BTN = "🗓️ Qatnashuv"
 NAME, PHONE = range(2)
 CHANGE_NAME = 2
 YES, NO     = "att_yes", "att_no"
+MONTH_NAMES = {
+    1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel",
+    5: "May", 6: "Iyun", 7: "Iyul", 8: "Avgust",
+    9: "Sentabr", 10: "Oktabr", 11: "Noyabr", 12: "Dekabr"
+}
 
 # ─── /start & REGISTRATION ────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -176,39 +181,48 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Balansingiz: {user.balance:,.0f} so'm."
     )
 
-
 async def attendance_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show the user’s attendance for the last two months."""
+    """Show the user’s attendance for the current month."""
     user = await get_user_async(update.effective_user.id)
     if not user:
         return await update.message.reply_text("❌ Siz ro‘yxatdan o‘tmagansiz.")
-    
-    # calculate cutoff date
+
+    # Today in Tashkent
     tz = pytz.timezone("Asia/Tashkent")
     today = datetime.now(tz).date()
-    cutoff = today - timedelta(days=30)
+    current_month = today.month
+    current_year = today.year
+    month_name = MONTH_NAMES[current_month]
 
-    # filter & sort
-    recent = [
-        d for d in user.attendance
-        if datetime.strptime(d, "%Y-%m-%d").date() >= cutoff
+    # Filter attendance for this month/year
+    attended_dates = [
+        datetime.strptime(d, "%Y-%m-%d").date()
+        for d in user.attendance
     ]
-    recent.sort(reverse=True)
+    # keep only those in this month & year, sorted ascending
+    this_month = sorted(
+        d for d in attended_dates
+        if d.year == current_year and d.month == current_month
+    )
 
-    if not recent:
-        text = "⏳ So‘nggi bir oy ichida qatnashuvingiz yo‘q."
+    # Build response
+    if not this_month:
+        text = f"⏳ {month_name} oyida qatnashuvingiz yo‘q."
     else:
         lines = [
-            f"{i+1}. {datetime.strptime(d, '%Y-%m-%d').strftime('%d.%m.%Y')}"
-            for i, d in enumerate(recent)
+            f"{i+1}. {d.strftime('%d.%m.%Y')}"
+            for i, d in enumerate(this_month)
         ]
-        text = "🗓️ Siz qatnashgan kunlar (oxirgi 1 oy):\n\n" + "\n".join(lines)
+        text = (
+            f"🗓️ *{month_name} oyida* siz qatnashgan kunlar:\n\n" +
+            "\n".join(lines)
+        )
 
     await update.message.reply_text(
         text,
+        parse_mode="Markdown",
         reply_markup=get_default_kb(user.is_admin)
     )
-
 
 async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
