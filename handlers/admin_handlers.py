@@ -37,16 +37,13 @@ logger = logging.getLogger(__name__)
     S_ADD_ADMIN,      # selecting user to promote
     S_REMOVE_ADMIN,   # selecting admin to demote
     S_DELETE_USER,    # selecting user to delete
-    S_CARD_NUMBER,    # entering new card number
-    S_CARD_OWNER,     # entering new card owner name
-) = range(5)
+) = range(3)
 
 # ─── BUTTON LABELS ─────────────────────────────────────────────────────────────
 FOYD_BTN         = "Foydalanuvchilar"
 ADD_ADMIN_BTN    = "Admin Qo'shish"
 REMOVE_ADMIN_BTN = "Admin Olish"
 DELETE_USER_BTN  = "Foydalanuvchini O‘chirish"
-CARD_BTN         = "Karta Ma’lumotlari"
 MENU_BTN         = "🍽 Menyu"
 BACK_BTN         = "Ortga"
 KASSA_BTN        = "Kassa"
@@ -84,8 +81,7 @@ def get_admin_kb():
     return ReplyKeyboardMarkup([
         [FOYD_BTN, MENU_BTN],
         [ADD_ADMIN_BTN, REMOVE_ADMIN_BTN],
-        [DELETE_USER_BTN],
-        [CARD_BTN, KASSA_BTN],   
+        [DELETE_USER_BTN, KASSA_BTN],
         [BACK_BTN],
     ], resize_keyboard=True)  
 
@@ -717,59 +713,36 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
 
 # ─── CARD MANAGEMENT ─────────────────────────────────────────────────────────
 
-async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """1) Ask for new card number, with an inline ‘Ortga’ button."""
-    if update.callback_query:
-        await update.callback_query.answer()
-        try:
-            await update.callback_query.message.delete()
-        except BadRequest:
-            pass
-
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="Yangi karta raqamini kiriting:",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")
-        ]])
-    )
-    return S_CARD_NUMBER
-
-
-async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """2) Store card number and ask for owner name."""
-    text = update.message.text.strip()
-    context.user_data["new_card_number"] = text
-
-    await update.message.reply_text(
-        "Karta egasining ismini kiriting:",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")
-        ]])
-    )
-    return S_CARD_OWNER
-
-
-async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """3) Save both to DB, clear state, and go back to admin panel."""
-    owner = update.message.text.strip()
+# ─── /karta_raqami — set card number ────────────────────────────────────────────
+async def set_card_number_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update.effective_user.id):
+        return await update.message.reply_text("❌ Siz admin emassiz.")
+    if not context.args:
+        return await update.message.reply_text("❌ Foydalanish: /karta_raqami <raqam>")
+    number = context.args[0]
     col = await get_collection("card_details")
-
-    await col.update_one(
-        {},
-        {"$set": {
-            "card_number": context.user_data["new_card_number"],
-            "card_owner": owner
-        }},
-        upsert=True
-    )
-    context.user_data.pop("new_card_number", None)
-
+    await col.update_one({}, {"$set": {"card_number": number}}, upsert=True)
     await update.message.reply_text(
-        "✅ Karta ma'lumotlari muvaffaqiyatli o'zgartirildi!",
-        reply_markup=get_admin_kb()
+        f"✅ Karta raqami o‘zgartirildi: `{number}`",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_default_kb(True)
     )
-    return ConversationHandler.END
+
+# ─── /karta_egasi — set card owner name ────────────────────────────────────────
+async def set_card_owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update.effective_user.id):
+        return await update.message.reply_text("❌ Siz admin emassiz.")
+    if not context.args:
+        return await update.message.reply_text("❌ Foydalanish: /karta_egasi <ism>")
+    owner = " ".join(context.args)
+    col = await get_collection("card_details")
+    await col.update_one({}, {"$set": {"card_owner": owner}}, upsert=True)
+    await update.message.reply_text(
+        f"✅ Karta egasi o‘zgartirildi: *{owner}*",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_default_kb(True)
+    )
+
 
 # ─── CONVERSATION HANDLERS ──────────────────────────────────────────────────────
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -939,6 +912,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   • Ko‘rsatilgan sanadagi tushlikni bekor qiladi va balansni qaytaradi.\n"
         "   • Misol: `/cancel_lunch 2025-05-14 Texnik ishlar tufayli`\n\n"
         "_Har bir buyruqdan keyin bot sizga keyingi amallar bo‘yicha yo‘l-yo‘riq beradi._"
+        "/karta_raqami `<raqam>` — Yangi karta raqamini o‘rnatish"
+        "/karta_egasi   `<ism>`   — Karta egasining ismini o‘rnatish"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -953,6 +928,8 @@ def register_handlers(app):
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("cancel_lunch_date", cancel_lunch_command))
     app.add_handler(CommandHandler("help_admin", help_command))
+    app.add_handler(CommandHandler("karta_raqami", set_card_number_cmd))
+    app.add_handler(CommandHandler("karta_egasi",   set_card_owner_cmd))
     
     # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
     single_buttons = [
@@ -960,7 +937,6 @@ def register_handlers(app):
         (ADD_ADMIN_BTN,    start_add_admin),
         (REMOVE_ADMIN_BTN, start_remove_admin),
         (DELETE_USER_BTN,  start_delete_user),
-        (CARD_BTN,         start_card_management),
         (KASSA_BTN,        show_kassa),
         (MENU_BTN,         menu_panel),
         (BACK_BTN,         back_to_menu),  # Ortga always goes to menu
@@ -973,31 +949,6 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
   
-    # ─── 6) CARD MANAGEMENT CONVERSATION ───────────────────────────────
-    card_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), start_card_management),
-            CallbackQueryHandler(start_card_management, pattern=f"^{re.escape(CARD_BTN)}$"),
-        ],
-        states={
-            S_CARD_NUMBER: [
-                MessageHandler(filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_number),
-                CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
-            ],
-            S_CARD_OWNER: [
-                MessageHandler(filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_owner),
-                CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
-        ],
-        per_message=True,
-        allow_reentry=True,
-        name="card_management_conversation"
-    )
-    app.add_handler(card_conv)
-    
     # ─── 7) INLINE CALLBACKS FOR USER MGMT ─────────────────────────────
     app.add_handler(CallbackQueryHandler(add_admin_callback,    pattern=r"^add_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
