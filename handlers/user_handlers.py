@@ -456,6 +456,12 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(CXL_BTN)}$"), cancel_lunch))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), show_card_info))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(ADMIN_BTN)}$"), admin_panel))
+    app.add_handler(
+    MessageHandler(
+        filters.Regex(f"^{re.escape(HISTORY_BTN)}$"),
+        attendance_history
+    )
+)
 
     # inline callbacks
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{YES}$"))
