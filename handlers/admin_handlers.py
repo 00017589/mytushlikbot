@@ -472,36 +472,6 @@ async def notify_response_callback(update: Update, context: ContextTypes.DEFAULT
         f"{query.message.text}\n\n✅ Javobingiz qabul qilindi."
     )
 
-async def send_final_summary(context: ContextTypes.DEFAULT_TYPE):
-    """Send final summary at 10:00 AM for a broadcast."""
-    job = context.job
-    chat_id = job.data['chat_id']
-
-    if 'notify_responses' not in context.user_data:
-        return
-
-    resp = context.user_data['notify_responses']
-    total = resp['total_sent']
-    yes = len(resp['yes'])
-    no  = len(resp['no'])
-    pending = total - yes - no
-
-    summary = [
-        "📊 Xabar yuborish yakuniy natijalari:",
-        f"👥 Jami yuborilgan: {total}",
-        f"✅ Ha: {yes}",
-        f"❌ Yoʻq: {no}",
-        f"⏳ Javob bermaganlar: {pending}",
-    ]
-    if resp['failed']:
-        summary.append(f"⚠️ Yuborilmadi: {len(resp['failed'])}")
-
-    await context.bot.send_message(chat_id, "\n".join(summary))
-
-    # Clean up
-    context.user_data.pop('notify_responses', None)
-    context.user_data.pop('notify_message_id', None)
-
 # ─── MENU MANAGEMENT ───────────────────────────────────────────────────────
 async def menu_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the main menu management panel."""
@@ -748,12 +718,29 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
 # ─── 7) CARD MANAGEMENT ─────────────────────────────────────────────────────────
 
 async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the card management flow"""
-    await update.message.reply_text(
-        "Yangi karta raqamini kiriting:",
-        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+    """Start the card management flow with an inline ‘Ortga’ button."""
+    # If this was triggered via an inline callback, clean up the old message
+    if update.callback_query:
+        await update.callback_query.answer()
+        try:
+            await update.callback_query.message.delete()
+        except BadRequest:
+            pass
+        target = update.callback_query.message.chat_id
+        send_fn = context.bot.send_message
+    else:
+        target = update.effective_chat.id
+        send_fn = context.bot.send_message
+
+    await send_fn(
+        chat_id=target,
+        text="Yangi karta raqamini kiriting:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")
+        ]])
     )
     return S_CARD_NUMBER
+
 
 async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the new card number input"""
