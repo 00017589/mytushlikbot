@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
     S_DELETE_USER,    # selecting user to delete
     S_CARD_NUMBER,    # entering new card number
     S_CARD_OWNER,     # entering new card owner name
-) = range(11)
+) = range(5)
 
 # ─── BUTTON LABELS ─────────────────────────────────────────────────────────────
 FOYD_BTN         = "Foydalanuvchilar"
