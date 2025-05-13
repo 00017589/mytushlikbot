@@ -125,11 +125,17 @@ class User:
         if date_str in self.attendance:
             return
 
-        # 1) Deduct locally
+        # import here so it’s only loaded when needed
+        from utils.sheets_utils import get_price_from_sheet, update_user_balance_in_sheet
+
+        # 0) fetch live price from Sheets
+        price = await get_price_from_sheet(self.telegram_id)
+        self.daily_price = price
+
+        # 1) Deduct locally & record
         self.attendance.append(date_str)
-        self.balance -= self.daily_price
-        # <-- call _record_txn synchronously, no await
-        self._record_txn("attendance", -self.daily_price, f"Lunch on {date_str}")
+        self.balance -= price
+        self._record_txn("attendance", -price, f"Lunch on {date_str}")
 
         # 2) Save food choice if provided
         if food:
@@ -145,43 +151,49 @@ class User:
                 upsert=True
             )
 
-        # 3) Persist the new balance + attendance in MongoDB
+        # 3) Persist in Mongo
         await self.save()
-        from utils.sheets_utils import update_user_balance_in_sheet
-        # 4) Push balance to Google Sheets (and roll back on failure)
-        success = await update_user_balance_in_sheet(self.telegram_id, self.balance)
-        if not success:
-            # Roll back in memory and in DB
-            self.balance += self.daily_price
-            self._record_txn("rollback", self.daily_price, f"Rollback lunch on {date_str}")
+
+        # 4) Push new balance back to Sheets (rollback on failure)
+        ok = await update_user_balance_in_sheet(self.telegram_id, self.balance)
+        if not ok:
+            # rollback in‐memory & DB
+            self.balance += price
+            self._record_txn("rollback", price, f"Rollback lunch on {date_str}")
             await self.save()
-            raise RuntimeError(f"Failed to sync balance for {self.telegram_id} to Sheets")
+            raise RuntimeError(f"Failed to sync balance for {self.telegram_id} → rollback")
+
 
     async def remove_attendance(self, date_str: str):
         if date_str not in self.attendance:
             return
 
-        # 1) Refund locally
-        self.attendance.remove(date_str)
-        self.balance += self.daily_price
-        await self._record_txn("cancel", self.daily_price, f"Cancel lunch on {date_str}")
+        # import here so it’s only loaded when needed
+        from utils.sheets_utils import get_price_from_sheet, update_user_balance_in_sheet
 
-        # 2) Remove the daily_food_choices entry
+        # 0) fetch live price from Sheets
+        price = await get_price_from_sheet(self.telegram_id)
+        self.daily_price = price
+
+        # 1) Refund locally & record
+        self.attendance.remove(date_str)
+        self.balance += price
+        await self._record_txn("cancel", price, f"Cancel lunch on {date_str}")
+
+        # 2) Remove food-choice record
         col = await get_collection("daily_food_choices")
         await col.delete_one({"telegram_id": self.telegram_id, "date": date_str})
 
-        # 3) Persist the new balance in MongoDB
+        # 3) Persist in Mongo
         await self.save()
 
-        from utils.sheets_utils import update_user_balance_in_sheet
-        # 4) Push balance back to Google Sheets (and roll back on failure)
-        success = await update_user_balance_in_sheet(self.telegram_id, self.balance)
-        if not success:
-            # roll back
-            self.balance -= self.daily_price
-            await self._record_txn("rollback", -self.daily_price, f"Rollback cancel on {date_str}")
+        # 4) Push refunded balance back to Sheets (rollback on failure)
+        ok = await update_user_balance_in_sheet(self.telegram_id, self.balance)
+        if not ok:
+            self.balance -= price
+            self._record_txn("rollback", -price, f"Rollback cancel on {date_str}")
             await self.save()
-            raise RuntimeError(f"Failed to sync refund for {self.telegram_id} to Sheets")
+            raise RuntimeError(f"Failed to sync refund for {self.telegram_id} → rollback")
         
     async def decline_attendance(self, date_str: str):
         if date_str not in self.declined_days:
@@ -216,11 +228,6 @@ class User:
     async def update_balance(self, amount: int, desc: str = "Balance adjustment"):
         self.balance += amount
         self._record_txn("balance", amount, desc)
-        await self.save()
-
-    async def set_daily_price(self, price: int):
-        self.daily_price = price
-        self._record_txn("price_update", 0, f"Daily price set to {price}")
         await self.save()
 
     async def promote_to_admin(self):
