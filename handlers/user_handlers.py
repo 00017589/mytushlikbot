@@ -367,7 +367,7 @@ async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now.hour < 7:
         return await update.message.reply_text(
             "❌ Tushlik ro‘yxati hali ochilmadi.\n"
-            f"Bekor qilish faqat soat {SURVEY_START_HOUR}:00 dan keyin mumkin."
+            f"Bekor qilish faqat soat 7:00 dan keyin mumkin."
         )
 
     # 2) After cutoff
