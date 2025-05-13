@@ -859,52 +859,70 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1) Only admins may run this
-    if not await is_admin(update.effective_user.id):
-        return await update.message.reply_text("❌ Siz admin emassiz.")
+    # 1) Only admins
+    user_id = update.effective_user.id
+    if not await is_admin(user_id):
+        return await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
 
-    # 2) Parse arguments: date + reason
-    if len(context.args) < 2:
+    # 2) Parse args
+    args = context.args
+    if len(args) < 2:
         return await update.message.reply_text(
-            "❌ Iltimos, buyruqni quyidagicha ishlating:\n"
-            "/cancel_lunch YYYY-MM-DD Sabab..."
+            "❌ Iltimos, quyidagi formatda kiriting:\n"
+            "`/cancel_lunch YYYY-MM-DD Sabab`\n"
+            "Masalan: `/cancel_lunch 2025-05-14 Texnik ishlar tufayli`",
+            parse_mode="Markdown"
+        )
+    date_str = args[0]
+    reason = " ".join(args[1:])
+
+    # 3) Validate date format
+    try:
+        cancel_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return await update.message.reply_text(
+            "❌ Noto‘g‘ri sana formati. Iltimos `YYYY-MM-DD` formatida kiriting.",
+            parse_mode="Markdown"
         )
 
-    date_str = context.args[0]
-    try:
-        # Validate the date
-        datetime.datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
-        return await update.message.reply_text("❌ Sana formatini YYYY-MM-DD tarzida kiriting.")
+    # 4) Prevent future dates
+    tz = pytz.timezone("Asia/Tashkent")
+    today = datetime.now(tz).date()
+    if cancel_date > today:
+        return await update.message.reply_text("❌ Kelajak sanasini bekor qilish mumkin emas.")
 
-    reason = " ".join(context.args[1:])
-
-    # 3) Perform the cancellation and notify everyone
+    # 5) Fetch all users and process refunds
     users = await get_all_users_async()
-    affected = 0
-
+    affected = []
     for u in users:
-        # If they’d RSVP’d, remove their attendance (and refund in your model)
-        if date_str in getattr(u, "attendance", []):
+        if date_str in u.attendance:
+            # use your model’s remove_attendance to handle refund + sheet sync
             await u.remove_attendance(date_str)
-            affected += 1
+            affected.append(u)
 
-        # Send the cancellation notice
+    # 6) Notify users
+    for u in users:
+        msg = (
+            f"⚠️ *E’lon:* {date_str} kuniga tushlik bekor qilindi.\n"
+            f"*Sabab:* {reason}"
+        )
+        if u in affected:
+            msg += f"\n_Balansingizga {u.daily_price:,} so‘m qaytarildi._"
         try:
-            await context.bot.send_message(
-                u.telegram_id,
-                f"⚠️ {date_str} kuni tushlik bekor qilindi.\nSabab: {reason}"
-            )
-        except Exception:
-            # ignore users we can’t reach
-            pass
+            await context.bot.send_message(u.telegram_id, msg, parse_mode="Markdown")
+        except:
+            logger.warning(f"Could not notify {u.telegram_id}")
 
-    # 4) Report back in the admin chat
-    await update.message.reply_text(
-        f"✅ {date_str} uchun tushlik bekor qilindi.\n"
-        f"Jami ta’sirlangan: {affected}/{len(users)}"
-    )
+    # 7) Summary back to admin
+    if affected:
+        text = (
+            f"✅ {date_str} uchun tushlik bekor qilindi.\n"
+            f"💔 Ta’sirlanganlar: {len(affected)} kishi Refund olindi."
+        )
+    else:
+        text = f"ℹ️ {date_str} uchun hech kim ro‘yxatda emas edi."
 
+    await update.message.reply_text(text)
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
