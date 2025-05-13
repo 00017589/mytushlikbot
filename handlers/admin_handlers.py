@@ -719,21 +719,16 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
 
 async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the card management flow with an inline ‘Ortga’ button."""
-    # If this was triggered via an inline callback, clean up the old message
+    # If triggered by a callback, delete the old inline message
     if update.callback_query:
         await update.callback_query.answer()
         try:
             await update.callback_query.message.delete()
         except BadRequest:
             pass
-        target = update.callback_query.message.chat_id
-        send_fn = context.bot.send_message
-    else:
-        target = update.effective_chat.id
-        send_fn = context.bot.send_message
 
-    await send_fn(
-        chat_id=target,
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
         text="Yangi karta raqamini kiriting:",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")
@@ -741,49 +736,36 @@ async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TY
     )
     return S_CARD_NUMBER
 
-
 async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the new card number input"""
-    if update.message.text == BACK_BTN:
-        await update.message.reply_text(
-            "Admin panel:",
-            reply_markup=get_admin_kb()
-        )
-        return ConversationHandler.END
-
-    # Store the card number temporarily
-    context.user_data['new_card_number'] = update.message.text
+    """Handle the new card number input (or inline back)."""
+    # Inline “Ortga” comes as a callback, not a message—so ignore here,
+    # it'll be caught by the CallbackQueryHandler below.
+    card_number = update.message.text.strip()
+    context.user_data["new_card_number"] = card_number
 
     await update.message.reply_text(
         "Karta egasining ismini kiriting:",
-        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")
+        ]])
     )
     return S_CARD_OWNER
 
 async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the new card owner name input and save both to database."""
-    # If they tapped “Ortga”, send them back into the admin panel
-    if update.message.text == BACK_BTN:
-        return await admin_panel(update, context)
+    owner_name = update.message.text.strip()
+    col = await get_collection("card_details")
 
-    # Otherwise save the new details
-    card_details_col = await get_collection("card_details")
-
-    await card_details_col.update_one(
-        {},  # match the single doc
-        {
-            "$set": {
-                "card_number": context.user_data['new_card_number'],
-                "card_owner": update.message.text
-            }
-        },
+    await col.update_one(
+        {},  # single‐doc
+        {"$set": {
+            "card_number": context.user_data["new_card_number"],
+            "card_owner": owner_name
+        }},
         upsert=True
     )
+    context.user_data.pop("new_card_number", None)
 
-    # Clear temp storage
-    context.user_data.pop('new_card_number', None)
-
-    # Confirm and show the admin panel again
     await update.message.reply_text(
         "✅ Karta ma'lumotlari muvaffaqiyatli o'zgartirildi!",
         reply_markup=get_admin_kb()
@@ -994,25 +976,27 @@ def register_handlers(app):
 
     # ─── 6) CARD MANAGEMENT CONVERSATION ───────────────────────────────
     card_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), start_card_management)],
+        entry_points=[
+            MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), start_card_management)
+        ],
         states={
             S_CARD_NUMBER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_number)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_number),
+                CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
             ],
             S_CARD_OWNER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_owner)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_owner),
+                CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
             ],
         },
         fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
+            CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
         ],
-        allow_reentry=True,
         per_message=True,
+        allow_reentry=True,
         name="card_management_conversation"
     )
     app.add_handler(card_conv)
-
     # ─── 7) INLINE CALLBACKS FOR USER MGMT ─────────────────────────────
     app.add_handler(CallbackQueryHandler(add_admin_callback,    pattern=r"^add_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
