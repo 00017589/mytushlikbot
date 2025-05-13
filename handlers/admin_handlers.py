@@ -715,11 +715,10 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed user recap for {u.telegram_id}: {e}")
 
-# ─── 7) CARD MANAGEMENT ─────────────────────────────────────────────────────────
+# ─── CARD MANAGEMENT ─────────────────────────────────────────────────────────
 
 async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the card management flow with an inline ‘Ortga’ button."""
-    # If triggered by a callback, delete the old inline message
+    """1) Ask for new card number, with an inline ‘Ortga’ button."""
     if update.callback_query:
         await update.callback_query.answer()
         try:
@@ -736,12 +735,11 @@ async def start_card_management(update: Update, context: ContextTypes.DEFAULT_TY
     )
     return S_CARD_NUMBER
 
+
 async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the new card number input (or inline back)."""
-    # Inline “Ortga” comes as a callback, not a message—so ignore here,
-    # it'll be caught by the CallbackQueryHandler below.
-    card_number = update.message.text.strip()
-    context.user_data["new_card_number"] = card_number
+    """2) Store card number and ask for owner name."""
+    text = update.message.text.strip()
+    context.user_data["new_card_number"] = text
 
     await update.message.reply_text(
         "Karta egasining ismini kiriting:",
@@ -751,16 +749,17 @@ async def handle_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     return S_CARD_OWNER
 
+
 async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the new card owner name input and save both to database."""
-    owner_name = update.message.text.strip()
+    """3) Save both to DB, clear state, and go back to admin panel."""
+    owner = update.message.text.strip()
     col = await get_collection("card_details")
 
     await col.update_one(
-        {},  # single‐doc
+        {},
         {"$set": {
             "card_number": context.user_data["new_card_number"],
-            "card_owner": owner_name
+            "card_owner": owner
         }},
         upsert=True
     )
@@ -973,19 +972,20 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu))
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
-
+  
     # ─── 6) CARD MANAGEMENT CONVERSATION ───────────────────────────────
     card_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), start_card_management)
+            MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), start_card_management),
+            CallbackQueryHandler(start_card_management, pattern=f"^{re.escape(CARD_BTN)}$"),
         ],
         states={
             S_CARD_NUMBER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_number),
+                MessageHandler(filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_number),
                 CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
             ],
             S_CARD_OWNER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_card_owner),
+                MessageHandler(filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_owner),
                 CallbackQueryHandler(admin_panel, pattern="^back_to_admin$")
             ],
         },
@@ -997,6 +997,7 @@ def register_handlers(app):
         name="card_management_conversation"
     )
     app.add_handler(card_conv)
+    
     # ─── 7) INLINE CALLBACKS FOR USER MGMT ─────────────────────────────
     app.add_handler(CallbackQueryHandler(add_admin_callback,    pattern=r"^add_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
