@@ -864,64 +864,61 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin only: cancel lunch on a given date, refund and notify everyone."""
-    caller = await get_user_async(update.effective_user.id)
-    if not (caller and caller.is_admin):
+    """Admin only: cancel lunch on a date (future or today), skip survey, notify & refund if needed."""
+    user = await get_user_async(update.effective_user.id)
+    if not (user and user.is_admin):
         return await update.message.reply_text("❌ Siz admin emassiz!")
 
-    if not context.args:
+    # Expect at least: /cancel_lunch YYYY-MM-DD Sabab
+    if len(context.args) < 2:
         return await update.message.reply_text(
-            "❌ Foydalanish: /cancel_lunch YYYY-MM-DD Sabab", 
-            reply_markup=get_admin_kb()
+            "❌ Foydalanish: /cancel_lunch YYYY-MM-DD Sabab",
+            reply_markup=get_default_kb(True)
         )
 
     raw_date, *reason_parts = context.args
-    # allow “bugun” as well
-    if raw_date.lower() in ("bugun", "today"):
-        tz = pytz.timezone("Asia/Tashkent")
-        date_str = datetime.now(tz).strftime("%Y-%m-%d")
-    else:
-        try:
-            # validate format
-            datetime.strptime(raw_date, "%Y-%m-%d")
-            date_str = raw_date
-        except ValueError:
-            return await update.message.reply_text(
-                "❌ Noto‘g‘ri sana formati. Iltimos: YYYY-MM-DD yoki “bugun”.",
-                reply_markup=get_admin_kb()
-            )
-
-    # ─── New: reject truly past dates ─────────────────────────────────────
-    tz = pytz.timezone("Asia/Tashkent")
-    today_date = datetime.now(tz).date()
-    date_obj   = datetime.strptime(date_str, "%Y-%m-%d").date()
-    if date_obj < today_date:
-        return await update.message.reply_text(
-            f"❌ {date_str} sanasi allaqachon o‘tgani uchun bekor qilib bo‘lmaydi.\n"
-            "Iltimos, bugungi yoki kelajakdagi sanani tanlang.",
-            reply_markup=get_admin_kb()
-        )
-    # ───────────────────────────────────────────────────────────────────────
-
     reason = " ".join(reason_parts).strip() or "Sabab ko‘rsatilmagan"
 
-    # record cancellation
-    col = await get_collection("cancelled_lunches")
-    await col.update_one(
+    # Normalize date_str
+    tz = pytz.timezone("Asia/Tashkent")
+    today = datetime.now(tz).date()
+    if raw_date.lower() in ("bugun", "today"):
+        date_str = today.strftime("%Y-%m-%d")
+    else:
+        try:
+            dt = datetime.strptime(raw_date, "%Y-%m-%d").date()
+        except ValueError:
+            return await update.message.reply_text(
+                "❌ Sana noto‘g‘ri formatda. Iltimos: YYYY-MM-DD yoki “bugun”.",
+                reply_markup=get_default_kb(True)
+            )
+        # ─── Reject truly past dates ───────────────────────────────────
+        if dt < today:
+            return await update.message.reply_text(
+                f"❌ {raw_date} sanasi allaqachon o‘tgani uchun bekor qilib bo‘lmaydi.\n"
+                "Iltimos, bugungi yoki kelajakdagi sanani tanlang.",
+                reply_markup=get_default_kb(True)
+            )
+        date_str = raw_date
+
+    # 1) Mark this date as cancelled in your own collection
+    coll = await get_collection("cancelled_lunches")
+    await coll.update_one(
         {"date": date_str},
         {"$set": {
             "date": date_str,
             "reason": reason,
             "cancelled_at": datetime.now(timezone.utc),
-            "cancelled_by": update.effective_user.id,
+            "cancelled_by": update.effective_user.id
         }},
         upsert=True
     )
 
-    # process refunds & notifications
+    # 2) Notify everyone and refund if they’d already checked in
     users = await get_all_users_async()
     refunded = 0
     for u in users:
+        # if they already had attendance, remove & refund
         if date_str in u.attendance:
             await u.remove_attendance(date_str)
             refunded += 1
@@ -930,22 +927,26 @@ async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYP
             f"⚠️ {date_str} kuni tushlik bekor qilindi.\n\n"
             f"Sabab: {reason}"
         )
-        if date_str in u.attendance:
+        # note: after remove_attendance, u.daily_price is still the same
+        if date_str not in u.attendance:
             text += f"\n💰 Balansingizga {u.daily_price:,.0f} so‘m qaytarildi."
+
         try:
             await context.bot.send_message(
                 chat_id=u.telegram_id,
                 text=text,
                 reply_markup=get_default_kb(u.is_admin)
             )
-        except Exception:
-            logger.warning(f"Could not notify {u.telegram_id}")
+        except Exception as e:
+            logger.warning(f"Unable to notify {u.telegram_id}: {e}")
 
+    # 3) Confirm back to the admin
     await update.message.reply_text(
         f"✅ {date_str} uchun tushlik bekor qilindi.\n"
-        f"Refund qilingan: {refunded} ta foydalanuvchi.",
-        reply_markup=get_admin_kb()
+        f"Refund: {refunded} foydalanuvchi.",
+        reply_markup=get_default_kb(True)
     )
+
     
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
