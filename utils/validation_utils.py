@@ -29,9 +29,10 @@ async def any_admins_exist() -> bool:
 def get_default_kb(is_admin: bool, has_food_selection: bool = False) -> ReplyKeyboardMarkup:
     """Build the standard user keyboard."""
     row1 = ["💸 Balansim", "✏️ Ism o'zgartirish"]
-    row2 = ["💳 Karta Raqami"]
+    row2 = ["💳 Karta Raqami", "🗓️ Qatnashuv" ]
+    row3 = []
     if has_food_selection:
-        row2.append("❌ Tushlikni bekor qilish")
+        row3.append("❌ Tushlikni bekor qilish")
     if is_admin:
         row1.append("🔧 Admin panel")
     return ReplyKeyboardMarkup([row1, row2], resize_keyboard=True)

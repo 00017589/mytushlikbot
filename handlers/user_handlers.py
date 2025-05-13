@@ -2,7 +2,7 @@
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from telegram.error import BadRequest
 from telegram.constants import ParseMode, ChatAction
@@ -43,12 +43,13 @@ NAME_BTN  = "✏️ Ism o'zgartirish"
 CXL_BTN   = "❌ Tushlikni bekor qilish"
 ADMIN_BTN = "🔧 Admin panel"
 CARD_BTN  = "💳 Karta Raqami"
+HISTORY_BTN = "🗓️ Qatnashuv"
+
 
 # ─── STATES ───────────────────────────────────
 NAME, PHONE = range(2)
 CHANGE_NAME = 2
 YES, NO     = "att_yes", "att_no"
-
 
 # ─── /start & REGISTRATION ────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -179,14 +180,37 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def attendance_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the user’s attendance for the last two months."""
     user = await get_user_async(update.effective_user.id)
-    hist = user.attendance
-    text = (
-        "Qatnashgan kunlar:\n" + "\n".join(hist)
-        if hist else
-        "Hech qanday qatnashuv yo'q."
+    if not user:
+        return await update.message.reply_text("❌ Siz ro‘yxatdan o‘tmagansiz.")
+    
+    # calculate cutoff date
+    tz = pytz.timezone("Asia/Tashkent")
+    today = datetime.now(tz).date()
+    cutoff = today - timedelta(days=30)
+
+    # filter & sort
+    recent = [
+        d for d in user.attendance
+        if datetime.strptime(d, "%Y-%m-%d").date() >= cutoff
+    ]
+    recent.sort(reverse=True)
+
+    if not recent:
+        text = "⏳ So‘nggi ikki oy ichida qatnashuvingiz yo‘q."
+    else:
+        lines = [
+            f"{i+1}. {datetime.strptime(d, '%Y-%m-%d').strftime('%d.%m.%Y')}"
+            for i, d in enumerate(recent)
+        ]
+        text = "🗓️ Siz qatnashgan kunlar (oxirgi 2 oy):\n\n" + "\n".join(lines)
+
+    await update.message.reply_text(
+        text,
+        reply_markup=get_default_kb(user.is_admin)
     )
-    await update.message.reply_text(text)
+
 
 async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user_async(update.effective_user.id)
