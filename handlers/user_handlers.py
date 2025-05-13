@@ -358,56 +358,66 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 )
 
 async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = await get_user_async(update.effective_user.id)
+    """Entry point for /bekor_qilish"""
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
 
-    # cutoff at 10:00
+    # 1) Before survey opens
+    if now.hour < 7:
+        return await update.message.reply_text(
+            "❌ Tushlik ro‘yxati hali ochilmadi.\n"
+            f"Bekor qilish faqat soat {SURVEY_START_HOUR}:00 dan keyin mumkin."
+        )
+
+    # 2) After cutoff
     if now.hour >= 10:
         return await update.message.reply_text("❌ Bekor qilish vaqti o‘tdi.")
 
-    # not in today's list?
+    # 3) Not in attendance
+    user = await get_user_async(update.effective_user.id)
     if today not in user.attendance:
-        return await update.message.reply_text("❌ Siz bugun ro'yxatda emassiz.")
+        return await update.message.reply_text("❌ Siz bugun ro‘yxatda emassiz.")
 
-    # ask for confirmation
+    # 4) Ask for confirmation
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Ha, bekor qilaman", callback_data="cancel_yes"),
-        InlineKeyboardButton("❌ Yo'q, bekor qilmayman", callback_data="cancel_no")
+        InlineKeyboardButton("❌ Yo‘q",            callback_data="cancel_no")
     ]])
     await update.message.reply_text(
-        f"⚠️ Rostdan ham {today} uchun tushlik ishtirokini bekor qilmoqchimisiz?",
+        f"⚠️ {today} uchun tushlik ishtirokini bekor qilmoqchimisiz?",
         reply_markup=kb
     )
 
-# 2) callback handler
 async def cancel_lunch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the confirmation buttons"""
     query = update.callback_query
     await query.answer()
-
-    user = await get_user_async(query.from_user.id)
     tz = pytz.timezone("Asia/Tashkent")
     today = datetime.now(tz).strftime("%Y-%m-%d")
 
+    user = await get_user_async(query.from_user.id)
+
     if query.data == "cancel_no":
-        # user changed their mind
+        # user changed mind
         await query.message.edit_text("❌ Bekor qilish bekor qilindi.", reply_markup=None)
         return
 
-    # confirmed → remove attendance & refund
+    # confirmed → actually remove and refund
     await user.remove_attendance(today)
-    await query.message.edit_text(
+    text = (
         f"✅ {today} uchun tushlik bekor qilindi.\n"
-        f"Yangi balans: {user.balance:,.0f} so‘m",
-        reply_markup=None
+        f"Yangi balans: {user.balance:,.0f} so‘m"
     )
-    # and send them back their normal keyboard
+    await query.message.edit_text(text, reply_markup=None)
+
+    # restore their reply keyboard
     await context.bot.send_message(
         chat_id=query.from_user.id,
         text="Bosh menyu:",
         reply_markup=get_default_kb(user.is_admin)
     )
+
 
 # ─── SCHEDULED JOBS ────────────────────────────
 async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
