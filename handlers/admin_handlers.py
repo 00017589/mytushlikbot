@@ -36,13 +36,7 @@ logger = logging.getLogger(__name__)
 (
     S_ADD_ADMIN,      # selecting user to promote
     S_REMOVE_ADMIN,   # selecting admin to demote
-    S_SET_PRICE,      # selecting user to set price
-    S_INPUT_PRICE,    # entering custom price
     S_DELETE_USER,    # selecting user to delete
-    S_CANCEL_DATE,    # entering cancellation date
-    S_CANCEL_REASON,  # entering cancellation reason
-    S_NOTIFY_MESSAGE, # entering broadcast text
-    S_NOTIFY_CONFIRM, # confirming broadcast
     S_CARD_NUMBER,    # entering new card number
     S_CARD_OWNER,     # entering new card owner name
 ) = range(11)
@@ -51,14 +45,11 @@ logger = logging.getLogger(__name__)
 FOYD_BTN         = "Foydalanuvchilar"
 ADD_ADMIN_BTN    = "Admin Qo'shish"
 REMOVE_ADMIN_BTN = "Admin Olish"
-DAILY_PRICE_BTN  = "Kunlik Narx"
 DELETE_USER_BTN  = "Foydalanuvchini O‘chirish"
-CXL_LUNCH_BTN    = "Tushlikni Bekor Qilish"
 CARD_BTN         = "Karta Ma’lumotlari"
 MENU_BTN         = "🍽 Menyu"
 BACK_BTN         = "Ortga"
 KASSA_BTN        = "Kassa"
-NOTIFY_BTN       = "Xabar Yuborish"
 
 # ─── MENU SUB‑BUTTONS ──────────────────────────────────────────────────────────
 VIEW_MENU1_BTN = "1‑Menuni Ko‘rish"
@@ -93,9 +84,8 @@ def get_admin_kb():
     return ReplyKeyboardMarkup([
         [FOYD_BTN, MENU_BTN],
         [ADD_ADMIN_BTN, REMOVE_ADMIN_BTN],
-        [DAILY_PRICE_BTN, DELETE_USER_BTN],
-        [CXL_LUNCH_BTN, CARD_BTN],
-        [KASSA_BTN, NOTIFY_BTN],   
+        [DELETE_USER_BTN],
+        [CARD_BTN, KASSA_BTN],   
         [BACK_BTN],
     ], resize_keyboard=True)  
 
@@ -345,94 +335,6 @@ async def remove_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     await query.message.edit_text(f"✅ {user['name']} adminlikdan olib tashlandi!")
     await start_remove_admin(update, context)
-
-
-# ─── 5) SET PRICE ───────────────────────────────────────────────────────────────
-async def start_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = await users_col.find().to_list(length=None)
-    keyboard = []
-    for user in users:
-        keyboard.append([InlineKeyboardButton(
-            f"{user['name']} ({user.get('daily_price', 0):,} so'm)",
-            callback_data=f"set_price:{user['telegram_id']}"
-        )])
-    keyboard.append([InlineKeyboardButton("Ortga", callback_data="back_to_menu")])
-    
-    await update.message.reply_text(
-        "Kunlik narxini o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "back_to_menu":
-        await query.message.delete()
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Admin panel:",
-            reply_markup=get_admin_kb()
-        )
-        return ConversationHandler.END
-    
-    if query.data == "back_to_price_list":
-        await start_daily_price(update, context)
-        return
-    
-    if query.data.startswith("set_price:"):
-        user_id = int(query.data.split(":")[1])
-        user = await users_col.find_one({"telegram_id": user_id})
-        keyboard = [[InlineKeyboardButton("Ortga", callback_data="back_to_price_list")]]
-        await query.message.edit_text(
-            f"{user['name']} uchun yangi kunlik narxni kiriting:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        context.user_data["pending_price_user"] = user_id
-        return S_SET_PRICE
-
-async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the daily price input"""
-    try:
-        price = int(update.message.text)
-        if price < 0:
-            raise ValueError
-        
-        user_id = context.user_data.get("pending_price_user")
-        if not user_id:
-            await update.message.reply_text(
-                "❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
-                reply_markup=get_admin_kb()
-            )
-            return ConversationHandler.END
-        
-        # Update user's daily price
-        await users_col.update_one(
-            {"telegram_id": user_id},
-            {"$set": {"daily_price": price}}
-        )
-        
-        # Get updated user info
-        user = await users_col.find_one({"telegram_id": user_id})
-        
-        # Send confirmation and return to admin panel
-        await update.message.reply_text(
-            f"✅ {user['name']} uchun kunlik narx {price:,} so'mga o'zgartirildi!",
-            reply_markup=get_admin_kb()
-        )
-        
-        # Clear the stored data
-        if "pending_price_user" in context.user_data:
-            del context.user_data["pending_price_user"]
-        
-        return ConversationHandler.END
-        
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Iltimos, to'g'ri raqam kiriting!",
-            reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
-        )
-        return S_SET_PRICE
 
 # ─── 6) DELETE USER ─────────────────────────────────────────────────────────────
 
@@ -896,66 +798,6 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-
-# ─── 9) NOTIFY ALL ─────────────────────────────────────────────────────────────
-async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("notify_all called")
-    caller = await get_user_async(update.effective_user.id)
-    if not (caller and caller.is_admin):
-        return await update.message.reply_text("❌ Siz admin emassiz.")
-    await update.message.reply_text(
-        "⚠️ Yuboriladigan xabarni kiriting yoki Ortga bosing:",
-        reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
-    )
-    return S_NOTIFY_MESSAGE
-
-async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == BACK_BTN:
-        await update.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
-        return ConversationHandler.END
-
-    context.user_data['notify_message'] = text
-    confirm_kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Ha, yubor", callback_data="notify_confirm")],
-        [InlineKeyboardButton("❌ Bekor qil", callback_data="notify_cancel")],
-    ])
-    await update.message.reply_text(
-        f"⚠️ Quyidagichani yuborishga rozimisiz?\n\n{text}",
-        reply_markup=confirm_kb
-    )
-    return S_NOTIFY_CONFIRM
-
-async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("callback data:", update.callback_query.data)
-    query = update.callback_query
-    await query.answer()
-    if query.data == "notify_cancel":
-        await query.message.edit_text("❌ Xabar yuborish bekor qilindi.")
-        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
-        return ConversationHandler.END
-
-    # confirmed path
-    message = context.user_data['notify_message']
-    users = await get_all_users_async()
-    await query.message.edit_text("⏳ Xabar yuborilmoqda…")
-    sent = failed = 0
-    for u in users:
-        if not u.is_admin:
-            try:
-                await context.bot.send_message(u.telegram_id, message)
-                sent += 1
-            except:
-                failed += 1
-
-    summary = f"✅ {sent}/{len([u for u in users if not u.is_admin])} foydalanuvchiga yuborildi."
-    if failed:
-        summary += f"\n⚠️ {failed} kishi ololmadi."
-    await query.message.edit_text(summary)
-    await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
-    return ConversationHandler.END
-
-
 # ─── CONVERSATION HANDLERS ──────────────────────────────────────────────────────
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel any ongoing conversation and return to admin panel."""
@@ -973,88 +815,6 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=get_admin_kb()
         )
     context.user_data.clear()
-    return ConversationHandler.END
-
-async def cancel_lunch_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the lunch cancellation process"""
-    if not await is_admin(update.effective_user.id):
-        await update.message.reply_text("Bu buyruq faqat adminlar uchun.")
-        return
-
-    await update.message.reply_text(
-        "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY-MM-DD formatida)\n"
-        "Bugungi kun uchun bo'lsa, 'bugun' deb yozing."
-    )
-    return S_CANCEL_DATE
-
-async def handle_cancel_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the date input for lunch cancellation"""
-    date_input = update.message.text.strip().lower()
-    
-    if date_input == "bugun":
-        tz = pytz.timezone("Asia/Tashkent")
-        date_str = datetime.datetime.now(tz).strftime("%Y-%m-%d")
-    else:
-        try:
-            # Validate date format
-            datetime.datetime.strptime(date_input, "%Y-%m-%d")
-            date_str = date_input
-        except ValueError:
-            await update.message.reply_text(
-                "Noto'g'ri format. Iltimos, YYYY-MM-DD formatida yoki 'bugun' deb yozing."
-            )
-            return S_CANCEL_DATE
-
-    context.user_data['cancel_date'] = date_str
-    await update.message.reply_text("Bekor qilish sababini kiriting:")
-    return S_CANCEL_REASON
-
-async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the reason input and process the cancellation"""
-    reason = update.message.text.strip()
-    date_str = context.user_data.get('cancel_date')
-    
-    if not date_str:
-        await update.message.reply_text("Xatolik yuz berdi. Iltimos, qaytadan boshlang.")
-        return ConversationHandler.END
-
-    # Process cancellation
-    users = await get_all_users_async()
-    affected_users = []
-    
-    for user in users:
-        if date_str in user.attendance:
-            # Refund the user
-            user.balance += user.daily_price
-            user._record_txn("refund", user.daily_price, f"Lunch cancellation on {date_str}")
-            # Remove attendance
-            user.attendance.remove(date_str)
-            if date_str in user.food_choices:
-                del user.food_choices[date_str]
-            await user.save()
-            affected_users.append(user)
-
-    # Send notifications
-    for user in users:
-        try:
-            message = (
-                f"⚠️ Eslatma: {date_str} kuni tushlik bekor qilindi.\n"
-                f"Sabab: {reason}\n"
-            )
-            if user in affected_users:
-                message += f"Balansingizga {user.daily_price} so'm qaytarildi."
-            
-            await context.bot.send_message(user.telegram_id, message)
-        except:
-            pass
-
-    # Clear user data
-    context.user_data.pop('cancel_date', None)
-    
-    await update.message.reply_text(
-        f"✅ {date_str} uchun tushlik bekor qilindi.\n"
-        f"Jami {len(affected_users)} ta foydalanuvchi ta'sirlandi."
-    )
     return ConversationHandler.END
 
 async def test_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1080,38 +840,12 @@ def register_handlers(app):
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     app.add_handler(CommandHandler("test_debts", test_debts_command))
 
-    # ─── 2) NOTIFY CONVERSATION (/notify_all) ──────────────────────────
-    notify_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("notify_all", notify_all),
-            MessageHandler(filters.Regex(fr"^{re.escape(NOTIFY_BTN)}$"), notify_all),
-        ],
-        states={
-            S_NOTIFY_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_notify_message)
-            ],
-            S_NOTIFY_CONFIRM: [
-                CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
-            ],
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-        ],
-        allow_reentry=True,
-        per_message=True,
-        name="notify_conversation",
-    )
-    app.add_handler(notify_conv)
-
     # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
     single_buttons = [
         (FOYD_BTN,         list_users_exec),
         (ADD_ADMIN_BTN,    start_add_admin),
         (REMOVE_ADMIN_BTN, start_remove_admin),
-        (DAILY_PRICE_BTN,  start_daily_price),
         (DELETE_USER_BTN,  start_delete_user),
-        (CXL_LUNCH_BTN,    cancel_lunch_day),
         (CARD_BTN,         start_card_management),
         (KASSA_BTN,        show_kassa),
         (MENU_BTN,         menu_panel),
@@ -1124,17 +858,6 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu))
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
-
-    # ─── 5) CANCEL LUNCH CONVERSATION ──────────────────────────────────
-    cancel_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_BTN)}$"), cancel_lunch_day)],
-        states={
-            S_CANCEL_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_date)],
-            S_CANCEL_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_reason)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-    )
-    app.add_handler(cancel_conv)
 
     # ─── 6) CARD MANAGEMENT CONVERSATION ───────────────────────────────
     card_conv = ConversationHandler(
@@ -1166,26 +889,6 @@ def register_handlers(app):
     menu_pattern = r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1|del_menu2|menu_back)$"
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=menu_pattern))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
-
-    # ─── 9) PRICE SETTING INLINE FLOW ──────────────────────────────────
-    price_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
-        states={
-            S_SET_PRICE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_daily_price),
-                CallbackQueryHandler(daily_price_callback, pattern=r"^back_to_price_list$")
-            ]
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu),
-            CallbackQueryHandler(daily_price_callback, pattern=r"^back_to_menu$"),
-            CommandHandler("cancel", cancel_conversation)
-        ],
-        allow_reentry=True,
-        name="price_conversation",
-        per_message=True
-    )
-    app.add_handler(price_conv)
 
     # ─── 10) NOTIFY RESPONSE INLINE (Optional) ─────────────────────────
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
