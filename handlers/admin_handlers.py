@@ -647,6 +647,11 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     tz    = pytz.timezone("Asia/Tashkent")
     now   = datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
+    
+    cancelled = await get_collection("cancelled_lunches")
+    if await cancelled.find_one({"date": today}):
+        # do nothing today
+        return
 
     # skip weekends
     if now.weekday() >= 5:
@@ -859,70 +864,80 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin only: cancel lunch on a given date, refund and notify everyone."""
     # 1) Only admins
-    user_id = update.effective_user.id
-    if not await is_admin(user_id):
-        return await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+    caller = await get_user_async(update.effective_user.id)
+    if not (caller and caller.is_admin):
+        return await update.message.reply_text("❌ Siz admin emassiz!")
 
-    # 2) Parse args
-    args = context.args
-    if len(args) < 2:
+    # 2) Parse args: /cancel_lunch YYYY-MM-DD [reason...]
+    if not context.args:
         return await update.message.reply_text(
-            "❌ Iltimos, quyidagi formatda kiriting:\n"
-            "`/cancel_lunch YYYY-MM-DD Sabab`\n"
-            "Masalan: `/cancel_lunch 2025-05-14 Texnik ishlar tufayli`",
-            parse_mode="Markdown"
-        )
-    date_str = args[0]
-    reason = " ".join(args[1:])
-
-    # 3) Validate date format
-    try:
-        cancel_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-    except ValueError:
-        return await update.message.reply_text(
-            "❌ Noto‘g‘ri sana formati. Iltimos `YYYY-MM-DD` formatida kiriting.",
-            parse_mode="Markdown"
+            "❌ Foydalanish: /cancel_lunch YYYY-MM-DD Sabab"
         )
 
-    # 4) Prevent future dates
-    tz = pytz.timezone("Asia/Tashkent")
-    today = datetime.now(tz).date()
-    if cancel_date > today:
-        return await update.message.reply_text("❌ Kelajak sanasini bekor qilish mumkin emas.")
-
-    # 5) Fetch all users and process refunds
-    users = await get_all_users_async()
-    affected = []
-    for u in users:
-        if date_str in u.attendance:
-            # use your model’s remove_attendance to handle refund + sheet sync
-            await u.remove_attendance(date_str)
-            affected.append(u)
-
-    # 6) Notify users
-    for u in users:
-        msg = (
-            f"⚠️ *E’lon:* {date_str} kuniga tushlik bekor qilindi.\n"
-            f"*Sabab:* {reason}"
-        )
-        if u in affected:
-            msg += f"\n_Balansingizga {u.daily_price:,} so‘m qaytarildi._"
+    raw_date, *reason_parts = context.args
+    # allow “bugun” as well
+    if raw_date.lower() in ("bugun", "today"):
+        tz = pytz.timezone("Asia/Tashkent")
+        date_str = datetime.now(tz).strftime("%Y-%m-%d")
+    else:
         try:
-            await context.bot.send_message(u.telegram_id, msg, parse_mode="Markdown")
-        except:
+            # validate format
+            datetime.strptime(raw_date, "%Y-%m-%d")
+            date_str = raw_date
+        except ValueError:
+            return await update.message.reply_text(
+                "❌ Noto‘g‘ri sana formati. Iltimos: YYYY-MM-DD yoki “bugun”."
+            )
+
+    reason = " ".join(reason_parts).strip() or "Sabab ko‘rsatilmagan"
+
+    # 3) Record in “cancelled_lunches” so survey/summary skip it
+    col = await get_collection("cancelled_lunches")
+    await col.update_one(
+        {"date": date_str},
+        {"$set": {
+            "date": date_str,
+            "reason": reason,
+            "cancelled_at": datetime.now(timezone.utc),
+            "cancelled_by": update.effective_user.id,
+        }},
+        upsert=True
+    )
+
+    # 4) Fetch all users and process refunds & notifications
+    users = await get_all_users_async()
+    refunded = 0
+    for u in users:
+        # if they’d signed up → remove_attendance will refund & sync sheets
+        if date_str in u.attendance:
+            await u.remove_attendance(date_str)
+            refunded += 1
+
+        # send them the cancellation notice
+        text = (
+            f"⚠️ {date_str} kuni tushlik bekor qilindi.\n\n"
+            f"Sabab: {reason}"
+        )
+        if date_str in u.attendance:
+            text += f"\n💰 Balansingizga {u.daily_price:,.0f} so‘m qaytarildi."
+        try:
+            await context.bot.send_message(
+                chat_id=u.telegram_id,
+                text=text,
+                reply_markup=get_default_kb(u.is_admin)
+            )
+        except Exception:
             logger.warning(f"Could not notify {u.telegram_id}")
 
-    # 7) Summary back to admin
-    if affected:
-        text = (
-            f"✅ {date_str} uchun tushlik bekor qilindi.\n"
-            f"💔 Ta’sirlanganlar: {len(affected)} kishi Refund olindi."
-        )
-    else:
-        text = f"ℹ️ {date_str} uchun hech kim ro‘yxatda emas edi."
+    # 5) Confirm back to admin
+    await update.message.reply_text(
+        f"✅ {date_str} uchun tushlik bekor qilindi.\n"
+        f"Refund qilingan: {refunded} ta foydalanuvchi.",
+        reply_markup=get_admin_kb()
+    )
 
-    await update.message.reply_text(text)
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
@@ -960,7 +975,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("cancel_lunch", cancel_lunch_command))
     app.add_handler(CommandHandler("help", help_command))
-
+    
     # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
     single_buttons = [
         (FOYD_BTN,         list_users_exec),
