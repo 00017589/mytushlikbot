@@ -9,6 +9,7 @@ from telegram.error import BadRequest
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
@@ -346,70 +347,86 @@ async def remove_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await start_remove_admin(update, context)
 
 
-# ─── 5) SET PRICE (updated) ─────────────────────────────────
+# ─── 5) SET PRICE ───────────────────────────────────────────────────────────────
 async def start_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show list of users to adjust daily price"""
+    """Entry for /Kunlik Narx or DAILY_PRICE_BTN—show inline list of users."""
     users = await users_col.find().to_list(length=None)
+    if not users:
+        return await update.message.reply_text("Hech qanday foydalanuvchi yo‘q.", reply_markup=get_admin_kb())
+
     keyboard = [
-        [InlineKeyboardButton(f"{u['name']} ({u.get('daily_price',0):,} so'm)", callback_data=f"set_price:{u['telegram_id']}")] 
+        [InlineKeyboardButton(f"{u['name']} ({u.get('daily_price',0):,} so‘m)",
+                              callback_data=f"set_price:{u['telegram_id']}")]
         for u in users
     ]
-    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")])
-    await update.message.reply_text(
-        "Kunlik narxini o'zgartirmoqchi bo'lgan foydalanuvchini tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return S_SET_PRICE
+    keyboard.append([InlineKeyboardButton(BACK_BTN, callback_data="back_to_menu")])
+
+    text = "Kunlik narxini o‘zgartirmoqchi bo‘lgan foydalanuvchini tanlang:"
+    # if called via reply-button (no callback_query), use message.reply; else edit
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    return S_INPUT_PRICE  # Next we expect either a callback or a text
 
 async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the user‐selection inline callback."""
     query = update.callback_query
     await query.answer()
     data = query.data
-    if data == "back_to_admin":
-        # return to admin panel
+
+    if data == "back_to_menu":
+        # just go back to admin panel
         await query.message.delete()
-        await query.message.reply_text("Admin panel:", reply_markup=get_admin_kb())
+        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
         return ConversationHandler.END
 
-    # data == set_price:<id>
-    if data.startswith("set_price:"):
-        uid = int(data.split(':',1)[1])
-        user = await users_col.find_one({"telegram_id": uid})
-        context.user_data['pending_price_user'] = uid
-        # prompt for new price
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BTN, callback_data="back_to_admin")]])
-        await query.message.edit_text(
-            f"{user['name']} uchun yangi narxni kiriting (raqam sifatida):", reply_markup=kb
-        )
-        return S_SET_PRICE
+    # data is "set_price:<telegram_id>"
+    uid = int(data.split(":",1)[1])
+    user = await users_col.find_one({"telegram_id": uid})
+    if not user:
+        return await query.message.edit_text("❌ Foydalanuvchi topilmadi.", reply_markup=get_admin_kb())
+
+    # remember who we're editing
+    context.user_data["pending_price_user"] = uid
+
+    # prompt for the new price
+    await query.message.edit_text(
+        f"{user['name']} uchun yangi kunlik narxni raqam ko‘rinishida kiriting:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return S_INPUT_PRICE
 
 async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle entering of price"""
-    text = update.message.text.strip().replace(',','')
+    """Handle the custom‐price text entry."""
+    uid = context.user_data.get("pending_price_user")
+    if uid is None:
+        # not in a price flow
+        return
+
+    text = update.message.text.strip().replace(",", "").replace(" ", "")
     try:
         price = float(text)
         if price < 0:
             raise ValueError()
     except ValueError:
         return await update.message.reply_text(
-            "❌ Iltimos, haqiqiy raqam kiriting!", reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
+            "❌ Iltimos, haqiqiy raqam kiriting!",
+            reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
         )
 
-    uid = context.user_data.get('pending_price_user')
-    if not uid:
-        return await update.message.reply_text("❌ Xatolik. Qayta urinib ko'ring.", reply_markup=get_admin_kb())
-
-    # update DB
+    # save and teardown
     await users_col.update_one({"telegram_id": uid}, {"$set": {"daily_price": price}})
-    user = await users_col.find_one({"telegram_id": uid})
-
+    u = await users_col.find_one({"telegram_id": uid})
     await update.message.reply_text(
-        f"✅ {user['name']} uchun kunlik narx {price:,.0f} so'mga o'zgartirildi!",
+        f"✅ {u['name']} uchun kunlik narx {price:,.0f} so‘mga o‘zgartirildi!",
         reply_markup=get_admin_kb()
     )
-    context.user_data.pop('pending_price_user', None)
-    return ConversationHandler.END
 
+    context.user_data.pop("pending_price_user", None)
+    return ConversationHandler.END
 
 # ─── 6) DELETE USER ─────────────────────────────────────────────────────────────
 
@@ -1154,14 +1171,21 @@ def register_handlers(app):
 
     # ─── 9) PRICE SETTING INLINE FLOW ──────────────────────────────────
     price_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
+        entry_points=[
+            MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)
+        ],
         states={
-            S_SET_PRICE: [CallbackQueryHandler(daily_price_callback, pattern=r"^set_price:")],
-            S_SET_PRICE:  [MessageHandler(filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_daily_price)],
+            S_INPUT_PRICE: [
+                CallbackQueryHandler(daily_price_callback, pattern=r"^set_price:\d+$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price),
+            ],
         },
-        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), start_daily_price)],
-        allow_reentry=True,
+        fallbacks=[
+            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
+            CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"),
+        ],
         per_message=True,
+        allow_reentry=True,
         name="price_conversation"
     )
     app.add_handler(price_conv)
