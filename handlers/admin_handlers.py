@@ -858,6 +858,79 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚠️ {failed} ta xatolik yuz berdi."
     )
 
+async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 1) Only admins may run this
+    if not await is_admin(update.effective_user.id):
+        return await update.message.reply_text("❌ Siz admin emassiz.")
+
+    # 2) Parse arguments: date + reason
+    if len(context.args) < 2:
+        return await update.message.reply_text(
+            "❌ Iltimos, buyruqni quyidagicha ishlating:\n"
+            "/cancel_lunch YYYY-MM-DD Sabab..."
+        )
+
+    date_str = context.args[0]
+    try:
+        # Validate the date
+        datetime.datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return await update.message.reply_text("❌ Sana formatini YYYY-MM-DD tarzida kiriting.")
+
+    reason = " ".join(context.args[1:])
+
+    # 3) Perform the cancellation and notify everyone
+    users = await get_all_users_async()
+    affected = 0
+
+    for u in users:
+        # If they’d RSVP’d, remove their attendance (and refund in your model)
+        if date_str in getattr(u, "attendance", []):
+            await u.remove_attendance(date_str)
+            affected += 1
+
+        # Send the cancellation notice
+        try:
+            await context.bot.send_message(
+                u.telegram_id,
+                f"⚠️ {date_str} kuni tushlik bekor qilindi.\nSabab: {reason}"
+            )
+        except Exception:
+            # ignore users we can’t reach
+            pass
+
+    # 4) Report back in the admin chat
+    await update.message.reply_text(
+        f"✅ {date_str} uchun tushlik bekor qilindi.\n"
+        f"Jami ta’sirlangan: {affected}/{len(users)}"
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    caller = await get_user_async(update.effective_user.id)
+    if not (caller and caller.is_admin):
+        return await update.message.reply_text("❌ Siz admin emassiz.")
+    
+    help_text = (
+        "🔧 *Admin Qo‘llanma*\n\n"
+        "1️⃣ `/admin`\n"
+        "   • Admin panelini ochadi.\n"
+        "   • Tugmalar orqali foydalanuvchilar, narxlar, karta va menyu boshqaruvi.\n\n"
+        "2️⃣ `/run_summary`\n"
+        "   • Bugungi tushlik holatini darhol jo‘natadi.\n"
+        "   • Attendance, taom statistikasi va balanslarni yangilaydi.\n\n"
+        "3️⃣ `/test_debts`\n"
+        "   • Qarzdor foydalanuvchilarni tekshiradi va hisobot yuboradi.\n"
+        "   • Qachonki jadvalga qarzdorlar kiritilgan bo‘lsa ishlatish.\n\n"
+        "4️⃣ `/broadcast <xabar>`\n"
+        "   • Barcha foydalanuvchilarga xabar yuboradi.\n"
+        "   • Masalan: `/broadcast Assalomu alaykum, bugun ta’til!`\n\n"
+        "5️⃣ `/cancel_lunch <YYYY-MM-DD> <sabab>`\n"
+        "   • Ko‘rsatilgan sanadagi tushlikni bekor qiladi va balansni qaytaradi.\n"
+        "   • Misol: `/cancel_lunch 2025-05-14 Texnik ishlar tufayli`\n\n"
+        "_Har bir buyruqdan keyin bot sizga keyingi amallar bo‘yicha yo‘l-yo‘riq beradi._"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
 def register_handlers(app):
     # ─── INITIALIZATION ────────────────────────────────────────────────
     app.job_queue.run_once(lambda _: init_collections(), when=0)
@@ -867,6 +940,8 @@ def register_handlers(app):
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     app.add_handler(CommandHandler("test_debts", test_debts_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("cancel_lunch", cancel_lunch_command))
+    app.add_handler(CommandHandler("help", help_command))
 
     # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
     single_buttons = [
