@@ -442,13 +442,14 @@ async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-
 async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the custom price text entry."""
+    # Only act if we're in the middle of a custom-price prompt
     uid = context.user_data.get("pending_price_user")
-    text = update.message.text.strip().replace(",", "").replace(" ", "")
+    if uid is None:
+        return  # not a price prompt, ignore
 
-    # invalid number?
+    text = update.message.text.strip().replace(",", "").replace(" ", "")
     try:
         price = float(text)
         if price < 0:
@@ -461,7 +462,7 @@ async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ])
         )
 
-    # save and teardown
+    # Save the new price and teardown
     await users_col.update_one({"telegram_id": uid}, {"$set": {"daily_price": price}})
     u = await users_col.find_one({"telegram_id": uid})
     await update.message.reply_text(
@@ -470,6 +471,7 @@ async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     context.user_data.pop("pending_price_user", None)
     return ConversationHandler.END
+
 
 # ─── 6) DELETE USER ─────────────────────────────────────────────────────────────
 
@@ -678,15 +680,28 @@ async def add_menu_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, me
 
 async def handle_menu_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the text input for a new menu item."""
-    menu_name = context.user_data.pop("pending_menu_add", None)
-    if not menu_name:
-        return  # no menu in progress
+    # Only act if we're in the middle of an add-menu flow
+    if "pending_menu_add" not in context.user_data:
+        return
+
+    menu_name = context.user_data.pop("pending_menu_add")
     food = update.message.text.strip()
     if not food:
-        await update.message.reply_text("❌ Bo‘sh nom bo‘lmaydi.", reply_markup=get_menu_kb())
+        await update.message.reply_text(
+            "❌ Bo‘sh nom bo‘lmaydi.",
+            reply_markup=get_menu_kb()
+        )
         return
-    await menu_col.update_one({"name": menu_name}, {"$addToSet": {"items": food}}, upsert=True)
-    await update.message.reply_text(f"✅ «{food}» {menu_name} ga qo‘shildi!", reply_markup=get_menu_kb())
+
+    await menu_col.update_one(
+        {"name": menu_name},
+        {"$addToSet": {"items": food}},
+        upsert=True
+    )
+    await update.message.reply_text(
+        f"✅ «{food}» {menu_name} ga qo‘shildi!",
+        reply_markup=get_menu_kb()
+    )
 
 async def del_menu_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, menu_name: str):
     """Show inline buttons to delete an existing item."""
@@ -1018,16 +1033,18 @@ async def cancel_lunch_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
         return ConversationHandler.END
 
-    # Show a reply‑keyboard with a single “Ortga” button
+    context.user_data["in_cancel"] = True
     await update.message.reply_text(
-        "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY‑MM‑DD formatida)\n"
-        "Bugungi kun uchun “bugun” deb yozing.",
+        "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY-MM-DD formatida yoki “bugun” deb yozing)",
         reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
     )
     return S_CANCEL_DATE
 
 async def handle_cancel_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the date input for lunch cancellation."""
+    if not context.user_data.get("in_cancel"):
+        return ConversationHandler.END
+
     text = update.message.text.strip().lower()
     if text == BACK_BTN:
         return await cancel_conversation(update, context)
@@ -1041,12 +1058,12 @@ async def handle_cancel_date(update: Update, context: ContextTypes.DEFAULT_TYPE)
             date_str = text
         except ValueError:
             await update.message.reply_text(
-                "❌ Noto‘g‘ri format. Iltimos, YYYY‑MM‑DD yoki “bugun”.",
+                "❌ Noto‘g‘ri format. Iltimos, YYYY-MM-DD yoki “bugun”.",
                 reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
             )
             return S_CANCEL_DATE
 
-    context.user_data['cancel_date'] = date_str
+    context.user_data["cancel_date"] = date_str
     await update.message.reply_text(
         f"{date_str} uchun sababni kiriting:",
         reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
@@ -1055,11 +1072,14 @@ async def handle_cancel_date(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the reason and process the cancellation."""
+    if not context.user_data.get("in_cancel"):
+        return ConversationHandler.END
+
     text = update.message.text.strip()
     if text == BACK_BTN:
         return await cancel_conversation(update, context)
 
-    date_str = context.user_data.get('cancel_date')
+    date_str = context.user_data.get("cancel_date")
     if not date_str:
         await update.message.reply_text("❌ Xatolik yuz berdi. Iltimos, qaytadan boshlang.")
         return ConversationHandler.END
@@ -1067,7 +1087,7 @@ async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYP
     users = await get_all_users_async()
     affected = []
     for u in users:
-        if date_str in getattr(u, 'attendance', []):
+        if date_str in getattr(u, "attendance", []):
             u.balance += u.daily_price
             await u._record_txn("refund", u.daily_price, f"Bekor: {date_str}")
             u.attendance.remove(date_str)
@@ -1084,10 +1104,10 @@ async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYP
         except:
             logger.warning(f"Could not notify {u.telegram_id}")
 
-    context.user_data.pop('cancel_date', None)
+    context.user_data.pop("in_cancel", None)
+    context.user_data.pop("cancel_date", None)
     await update.message.reply_text(
-        f"✅ {date_str} uchun tushlik bekor qilindi.\n"
-        f"Jami {len(affected)} ta foydalanuvchi ta'sirlandi.",
+        f"✅ {date_str} uchun tushlik bekor qilindi.\nJami {len(affected)} ta foydalanuvchi ta'sirlandi.",
         reply_markup=get_admin_kb()
     )
     return ConversationHandler.END
