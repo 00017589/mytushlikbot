@@ -911,9 +911,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "5️⃣ `/cancel_lunch <YYYY-MM-DD> <sabab>`\n"
         "   • Ko‘rsatilgan sanadagi tushlikni bekor qiladi va balansni qaytaradi.\n"
         "   • Misol: `/cancel_lunch 2025-05-14 Texnik ishlar tufayli`\n\n"
+        "6️⃣ /karta_raqami `<raqam>` — Yangi karta raqamini o‘rnatish`\n\n"
+        "7️⃣ /karta_egasi   `<ism>`   — Karta egasining ismini o‘rnatish`\n\n"
         "_Har bir buyruqdan keyin bot sizga keyingi amallar bo‘yicha yo‘l-yo‘riq beradi._"
-        "/karta_raqami `<raqam>` — Yangi karta raqamini o‘rnatish"
-        "/karta_egasi   `<ism>`   — Karta egasining ismini o‘rnatish"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
