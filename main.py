@@ -3,7 +3,6 @@ import os
 import sys
 import tempfile
 import atexit
-import asyncio
 import logging
 from datetime import time as dt_time
 
@@ -39,7 +38,6 @@ def _cleanup_lock():
     global _lock_fd
     if _lock_fd:
         try:
-            # on Unix
             import fcntl
             fcntl.flock(_lock_fd, fcntl.LOCK_UN)
         except:
@@ -54,7 +52,6 @@ def _acquire_lock():
     global _lock_fd
     _lock_fd = open(_lock_file, "w")
     try:
-        # on Unix
         import fcntl
         fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except Exception:
@@ -65,16 +62,14 @@ def _acquire_lock():
 # ─── Error handler ─────────────────────────────────────────────────────────
 async def error_handler(update, context):
     logger.error(f"Update {update!r} caused error {context.error!r}", exc_info=True)
-    ADMIN_ID = 5192568051  # replace with your admin Telegram ID
-    tb = getattr(context.error, "__traceback__", None)
-    text = f"❌ Error:\n{context.error}\n"
+    ADMIN_ID = 5192568051
     try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=text)
-    except Exception as e:
-        logger.error(f"Failed to send error to admin: {e}", exc_info=True)
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ Error: {context.error}")
+    except:
+        pass
 
-# ─── Async main ─────────────────────────────────────────────────────────────
-async def main():
+# ─── Main ─────────────────────────────────────────────────────────────────
+def main():
     # 1) Single‐instance guard
     _acquire_lock()
 
@@ -86,58 +81,45 @@ async def main():
         logger.error("Missing BOT_TOKEN or MONGODB_URI; aborting.")
         sys.exit(1)
 
-    # 3) Init database
-    await init_db()
+    # 3) Init database (awaited synchronously)
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(init_db())
     logger.info("Database initialized.")
 
-    # 4) Build the application
-    app = ApplicationBuilder().token(token).build()
+    # 4) Build the app
+    app = (
+        ApplicationBuilder()
+        .token(token)
+        .build()
+    )
     app.add_error_handler(error_handler)
 
-    # 5) Ensure webhook is cleared before polling
+    # 5) Clear any existing webhook 
     try:
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Existing webhook deleted.")
-    except Exception as e:
-        logger.warning(f"Could not delete webhook: {e}")
+        app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared existing webhook.")
+    except Exception:
+        pass
 
-    # 6) Register handlers in correct order
-    ah.register_handlers(app)  # admin first
-    uh.register_handlers(app)  # then user flows
+    # 6) Register handlers (admin first!)
+    ah.register_handlers(app)
+    uh.register_handlers(app)
 
-    # 7) Schedule recurring jobs in Asia/Tashkent
+    # 7) Schedule jobs
     tz = pytz.timezone("Asia/Tashkent")
     jq = app.job_queue
-    jq.run_daily(
-        uh.morning_prompt,
-        time=dt_time(7, 0, tzinfo=tz),
-        days=(1, 2, 3, 4, 5),
-        name="morning_prompt"
-    )
-    jq.run_daily(
-        ah.send_summary,
-        time=dt_time(10, 0, tzinfo=tz),
-        days=(1, 2, 3, 4, 5),
-        name="daily_summary"
-    )
-    jq.run_daily(
-        uh.check_debts,
-        time=dt_time(12, 0, tzinfo=tz),
-        days=(1, 3, 5),
-        name="debt_check"
-    )
-    jq.run_daily(
-        lambda ctx: User.cleanup_old_food_choices(),
-        time=dt_time(0, 0, tzinfo=tz),
-        name="midnight_cleanup"
-    )
+    jq.run_daily(uh.morning_prompt,    time=dt_time(7,  0, tzinfo=tz), days=(1,2,3,4,5), name="morning_prompt")
+    jq.run_daily(ah.send_summary,      time=dt_time(10, 0, tzinfo=tz), days=(1,2,3,4,5), name="daily_summary")
+    jq.run_daily(uh.check_debts,       time=dt_time(12, 0, tzinfo=tz), days=(1,3,5),       name="debt_check")
+    jq.run_daily(lambda ctx: User.cleanup_old_food_choices(),
+                                      time=dt_time(0,   tzinfo=tz),   name="midnight_cleanup")
 
-    # 8) Start polling
-    logger.info("Starting polling…")
-    await app.run_polling(
+    # 8) Start polling (manages its own loop)
+    logger.info("Bot started, polling…")
+    app.run_polling(
         drop_pending_updates=True,
         allowed_updates=["message", "callback_query"]
     )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
