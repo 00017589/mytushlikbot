@@ -983,7 +983,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     app.add_handler(CommandHandler("test_debts", test_debts_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(CommandHandler("cancel_lunch", cancel_lunch_command))
+    app.add_handler(CommandHandler("cancel_lunch_date", cancel_lunch_command))
     app.add_handler(CommandHandler("help", help_command))
     
     # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
