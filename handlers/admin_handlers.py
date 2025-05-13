@@ -893,29 +893,37 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
         return await update.message.reply_text("❌ Siz admin emassiz.")
-    
-    help_text = (
-        "🔧 *Admin Qo‘llanma*\n\n"
-        "1️⃣ `/admin`\n"
-        "   • Admin panelini ochadi.\n"
-        "   • Tugmalar orqali foydalanuvchilar, narxlar, karta va menyu boshqaruvi.\n\n"
-        "2️⃣ `/run_summary`\n"
-        "   • Bugungi tushlik holatini darhol jo‘natadi.\n"
-        "   • Attendance, taom statistikasi va balanslarni yangilaydi.\n\n"
-        "3️⃣ `/test_debts`\n"
-        "   • Qarzdor foydalanuvchilarni tekshiradi va hisobot yuboradi.\n"
-        "   • Qachonki jadvalga qarzdorlar kiritilgan bo‘lsa ishlatish.\n\n"
-        "4️⃣ `/broadcast <xabar>`\n"
-        "   • Barcha foydalanuvchilarga xabar yuboradi.\n"
-        "   • Masalan: `/broadcast Assalomu alaykum, bugun ta’til!`\n\n"
-        "5️⃣ `/cancel_lunch <YYYY-MM-DD> <sabab>`\n"
-        "   • Ko‘rsatilgan sanadagi tushlikni bekor qiladi va balansni qaytaradi.\n"
-        "   • Misol: `/cancel_lunch 2025-05-14 Texnik ishlar tufayli`\n\n"
-        "6️⃣ /karta_raqami `<raqam>` — Yangi karta raqamini o‘rnatish`\n\n"
-        "7️⃣ /karta_egasi   `<ism>`   — Karta egasining ismini o‘rnatish`\n\n"
-        "_Har bir buyruqdan keyin bot sizga keyingi amallar bo‘yicha yo‘l-yo‘riq beradi._"
-    )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+    help_text = """\
+        🔧 *Admin Qo‘llanma*
+
+        1️⃣ `/admin`  
+        • Admin panelini ochadi. Tugmalar orqali foydalanuvchilar, narxlar, karta va menyu boshqaruvi.
+
+        2️⃣ `/run_summary`  
+        • Bugungi tushlik holatini darhol jo‘natadi.
+
+        3️⃣ `/test_debts`  
+        • Qarzdor foydalanuvchilarni tekshiradi va hisobot yuboradi.
+
+        4️⃣ `/broadcast <xabar>`  
+        • Barcha foydalanuvchilarga xabar yuboradi.  
+        • Misol: `/broadcast Assalomu alaykum, bugun ta’til!`
+
+        5️⃣ `/cancel_lunch <YYYY-MM-DD> <sabab>`  
+        • Ko‘rsatilgan sanadagi tushlikni bekor qiladi va balansni qaytaradi.  
+        • Misol: `/cancel_lunch 2025-05-14 Texnik ishlar tufayli`
+
+        6️⃣ `/karta_raqami <raqam>`  
+        • Yangi karta raqamini o‘rnatish.
+
+        7️⃣ `/karta_egasi <ism>`  
+        • Karta egasining ismini o‘rnatish.
+
+        _Har bir buyruqdan keyin bot sizga keyingi amallar bo‘yicha yo‘l-yo‘riq beradi._\
+        """
+
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
 def register_handlers(app):
     # ─── INITIALIZATION ────────────────────────────────────────────────
