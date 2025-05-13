@@ -1,169 +1,143 @@
 #!/usr/bin/env python3
-import logging
 import os
 import sys
-import asyncio
 import tempfile
 import atexit
+import asyncio
+import logging
 from datetime import time as dt_time
-from datetime import datetime
+
 import pytz
-
-# Cross-platform file locking
-if os.name == 'nt':
-    import msvcrt
-else:
-    import fcntl
-
 from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    filters,
+)
 
 from database import init_db
 from config import BOT_TOKEN, MONGODB_URI
 from models.user_model import User
-import handlers.user_handlers as uh
 import handlers.admin_handlers as ah
+import handlers.user_handlers as uh
 
-logger = logging.getLogger(__name__)
+# ─── Logging ─────────────────────────────────────────────────────────────
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s %(levelname)s %(message)s",
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-async def error_handler(update, context):
-    logger.error(f"Update {update} caused error {context.error}", exc_info=True)
-    import traceback
-    tb = traceback.format_exc()
-    ADMIN_ID = 5192568051
-    try:
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"❌ Xatolik:\n{context.error}\n\n{tb[:1000]}"
-        )
-    except Exception as e:
-        logger.error(f"Failed to notify admin: {e}")
+# ─── Single‐instance lock ───────────────────────────────────────────────────
+_lock_file = os.path.join(tempfile.gettempdir(), "lunch_bot.lock")
+_lock_fd = None
 
-def check_single_instance():
-    lock_file = os.path.join(tempfile.gettempdir(), "lunch_bot.lock")
-    fd = open(lock_file, "w")
+def _cleanup_lock():
+    global _lock_fd
+    if _lock_fd:
+        try:
+            # on Unix
+            import fcntl
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+        except:
+            pass
+        _lock_fd.close()
+        try:
+            os.remove(_lock_file)
+        except:
+            pass
+
+def _acquire_lock():
+    global _lock_fd
+    _lock_fd = open(_lock_file, "w")
     try:
-        if os.name == "nt":
-            msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        atexit.register(lambda: cleanup_lock(fd, lock_file))
-        return fd
+        # on Unix
+        import fcntl
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except Exception:
-        fd.close()
-        logger.error("Bot already running, exiting.")
+        logger.error("Another instance is already running.")
         sys.exit(1)
+    atexit.register(_cleanup_lock)
 
-def cleanup_lock(fd, path):
+# ─── Error handler ─────────────────────────────────────────────────────────
+async def error_handler(update, context):
+    logger.error(f"Update {update!r} caused error {context.error!r}", exc_info=True)
+    ADMIN_ID = 5192568051  # replace with your admin Telegram ID
+    tb = getattr(context.error, "__traceback__", None)
+    text = f"❌ Error:\n{context.error}\n"
     try:
-        if os.name == "nt":
-            msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        fd.close()
-        if os.path.exists(path):
-            os.remove(path)
-    except Exception:
-        pass
+        await context.bot.send_message(chat_id=ADMIN_ID, text=text)
+    except Exception as e:
+        logger.error(f"Failed to send error to admin: {e}", exc_info=True)
 
-async def cleanup_old_data(context):
-    logger.info("Midnight cleanup…")
-    await User.cleanup_old_food_choices()
-    logger.info("Cleanup done.")
+# ─── Async main ─────────────────────────────────────────────────────────────
+async def main():
+    # 1) Single‐instance guard
+    _acquire_lock()
 
-def main():
-    # Single-instance guard
-    lock_fd = check_single_instance()
-
-    # Load env
-    load_dotenv()
+    # 2) Load .env and validate
+    load_dotenv(override=True)
     token = os.getenv("BOT_TOKEN", BOT_TOKEN)
     mongo_uri = os.getenv("MONGODB_URI", MONGODB_URI)
     if not token or not mongo_uri:
-        logger.error("Missing BOT_TOKEN or MONGODB_URI")
+        logger.error("Missing BOT_TOKEN or MONGODB_URI; aborting.")
         sys.exit(1)
 
-    # Asyncio loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # 3) Init database
+    await init_db()
+    logger.info("Database initialized.")
 
+    # 4) Build the application
+    app = ApplicationBuilder().token(token).build()
+    app.add_error_handler(error_handler)
+
+    # 5) Ensure webhook is cleared before polling
     try:
-        # Init DB
-        loop.run_until_complete(init_db())
-        logger.info("Database ready")
-
-        # Build app
-        application = (
-            ApplicationBuilder()
-            .token(token)
-            .connect_timeout(30.0)
-            .read_timeout(30.0)
-            .write_timeout(30.0)
-            .get_updates_read_timeout(30.0)
-            .build()
-        )
-        application.add_error_handler(error_handler)
-
-        # Register handlers
-        uh.register_handlers(application)
-        ah.register_handlers(application)
-
-        # ─── Delete any existing webhook ────────────────────────────────────
-        # Telegram will refuse getUpdates if a webhook is still set.
-        loop.run_until_complete(
-            application.bot.delete_webhook(drop_pending_updates=True)
-        )
-
-        # Schedule jobs
-        jq = application.job_queue
-        tz = pytz.timezone("Asia/Tashkent")
-
-        # Morning prompt 07:00 Mon–Fri
-        jq.run_daily(
-            uh.morning_prompt,
-            time=dt_time(7, 0, tzinfo=tz),
-            days=(1, 2, 3, 4, 5),
-            name="morning_survey"
-        )
-
-        # Daily summary 10:00 Mon–Fri
-        jq.run_daily(
-            ah.send_summary,
-            time=dt_time(10, 0, tzinfo=tz),
-            days=(1, 2, 3, 4, 5),
-            name="daily_summary"
-        )
-
-        # Debt check Mon/Wed/Fri at 12:00
-        jq.run_daily(
-            uh.check_debts,
-            time=dt_time(12, 0, tzinfo=tz),
-            days=(1, 3, 5),
-            name="debt_check"
-        )
-
-        # Midnight cleanup
-        jq.run_daily(
-            cleanup_old_data,
-            time=dt_time(0, 0, tzinfo=tz),
-            name="midnight_cleanup"
-        )
-
-        logger.info("Bot started, polling…")
-        application.run_polling(
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True
-        )
-
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Existing webhook deleted.")
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
-        raise
-    finally:
-        cleanup_lock(lock_fd, os.path.join(tempfile.gettempdir(), "lunch_bot.lock"))
+        logger.warning(f"Could not delete webhook: {e}")
+
+    # 6) Register handlers in correct order
+    ah.register_handlers(app)  # admin first
+    uh.register_handlers(app)  # then user flows
+
+    # 7) Schedule recurring jobs in Asia/Tashkent
+    tz = pytz.timezone("Asia/Tashkent")
+    jq = app.job_queue
+    jq.run_daily(
+        uh.morning_prompt,
+        time=dt_time(7, 0, tzinfo=tz),
+        days=(1, 2, 3, 4, 5),
+        name="morning_prompt"
+    )
+    jq.run_daily(
+        ah.send_summary,
+        time=dt_time(10, 0, tzinfo=tz),
+        days=(1, 2, 3, 4, 5),
+        name="daily_summary"
+    )
+    jq.run_daily(
+        uh.check_debts,
+        time=dt_time(12, 0, tzinfo=tz),
+        days=(1, 3, 5),
+        name="debt_check"
+    )
+    jq.run_daily(
+        lambda ctx: User.cleanup_old_food_choices(),
+        time=dt_time(0, 0, tzinfo=tz),
+        name="midnight_cleanup"
+    )
+
+    # 8) Start polling
+    logger.info("Starting polling…")
+    await app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"]
+    )
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
