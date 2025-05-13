@@ -40,11 +40,9 @@ logger = logging.getLogger(__name__)
 # ─── BUTTON LABELS ───────────────────────────
 BAL_BTN   = "💸 Balansim"
 NAME_BTN  = "✏️ Ism o'zgartirish"
-CXL_BTN   = "❌ Tushlikni bekor qilish"
 ADMIN_BTN = "🔧 Admin panel"
 CARD_BTN  = "💳 Karta Raqami"
 HISTORY_BTN = "🗓️ Qatnashuv"
-
 
 # ─── STATES ───────────────────────────────────
 NAME, PHONE = range(2)
@@ -140,7 +138,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/attendance — Qatnashuv tarixini ko'rish\n"
         "/history — To'lovlar tarixini ko'rish\n"
         "/name — Ism o'zgartirish\n"
-        "/cancel_lunch — Buyurtmani bekor qilish\n"
+        "/bekor_qilish — Buyurtmani bekor qilish\n"
         "/help — Yordam"
     )
     await update.message.reply_text(text)
@@ -354,26 +352,62 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Balansingiz: {user.balance:,} so‘m",
         reply_markup= get_default_kb(user.is_admin)
     )
+    await q.message.reply_text(
+    "Agar tushlikga qatnashish fikridan voz kechsangiz soat 09:59 gacha "
+    "bekor qilishingiz mumkin. Shunchaki /bekor_qilish buyrug‘ini bosing."
+)
 
-
-# ─── CANCEL LUNCH ──────────────────────────────
 async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await get_user_async(update.effective_user.id)
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.now(tz)
+    today = now.strftime("%Y-%m-%d")
+
+    # cutoff at 10:00
     if now.hour >= 10:
-        return await update.message.reply_text("Bekor qilish vaqti o'tdi.")
+        return await update.message.reply_text("❌ Bekor qilish vaqti o‘tdi.")
 
-    user = await get_user_async(update.effective_user.id)
-    today_str = now.strftime("%Y-%m-%d")
-    if today_str not in user.attendance:
-        return await update.message.reply_text("Siz bugun ro'yxatda emassiz.")
+    # not in today's list?
+    if today not in user.attendance:
+        return await update.message.reply_text("❌ Siz bugun ro'yxatda emassiz.")
 
-    await user.remove_attendance(today_str)
+    # ask for confirmation
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Ha, bekor qilaman", callback_data="cancel_yes"),
+        InlineKeyboardButton("❌ Yo'q, bekor qilmayman", callback_data="cancel_no")
+    ]])
     await update.message.reply_text(
-        f"{today_str} uchun buyurtma bekor qilindi. Balans: {user.balance:,.0f} so'm.",
-        reply_markup=get_default_kb(user.is_admin)
+        f"⚠️ Rostdan ham {today} uchun tushlik ishtirokini bekor qilmoqchimisiz?",
+        reply_markup=kb
     )
 
+# 2) callback handler
+async def cancel_lunch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user = await get_user_async(query.from_user.id)
+    tz = pytz.timezone("Asia/Tashkent")
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+
+    if query.data == "cancel_no":
+        # user changed their mind
+        await query.message.edit_text("❌ Bekor qilish bekor qilindi.", reply_markup=None)
+        return
+
+    # confirmed → remove attendance & refund
+    await user.remove_attendance(today)
+    await query.message.edit_text(
+        f"✅ {today} uchun tushlik bekor qilindi.\n"
+        f"Yangi balans: {user.balance:,.0f} so‘m",
+        reply_markup=None
+    )
+    # and send them back their normal keyboard
+    await context.bot.send_message(
+        chat_id=query.from_user.id,
+        text="Bosh menyu:",
+        reply_markup=get_default_kb(user.is_admin)
+    )
 
 # ─── SCHEDULED JOBS ────────────────────────────
 async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
@@ -442,18 +476,18 @@ def register_handlers(app):
     )
     app.add_handler(name_conv)
 
+    app.add_handler(CommandHandler("bekor_qilish", cancel_lunch))
+
     # core commands
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("attendance", attendance_history))
     app.add_handler(CommandHandler("history", transaction_history))
     app.add_handler(CommandHandler("menu", menu))
-    app.add_handler(CommandHandler("cancel_lunch", cancel_lunch))
 
     # reply‑keyboard shortcuts
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BAL_BTN)}$"), balance))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(NAME_BTN)}$"), change_name_start))
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(CXL_BTN)}$"), cancel_lunch))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), show_card_info))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(ADMIN_BTN)}$"), admin_panel))
     app.add_handler(
@@ -468,3 +502,4 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{NO}$"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^food:"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^cancel_attendance$"))
+    app.add_handler(CallbackQueryHandler(cancel_lunch_callback, pattern="^cancel_(yes|no)$"))
