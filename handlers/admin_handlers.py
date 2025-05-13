@@ -831,6 +831,33 @@ async def run_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await send_summary(context)
     return ConversationHandler.END
 
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Only admins can invoke this
+    if not await is_admin(update.effective_user.id):
+        return await update.message.reply_text("❌ Siz admin emassiz.")
+
+    if not context.args:
+        return await update.message.reply_text(
+            "❌ Iltimos, xabar matnini yozing.\n"
+            "Misol: /broadcast Assalomu alaykum!"
+        )
+
+    text = " ".join(context.args)
+    sent = failed = 0
+
+    users = await get_all_users_async()
+    for u in users:
+        try:
+            await context.bot.send_message(u.telegram_id, text)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await update.message.reply_text(
+        f"✅ Jami {sent} ta foydalanuvchiga yuborildi\n"
+        f"⚠️ {failed} ta xatolik yuz berdi."
+    )
+
 def register_handlers(app):
     # ─── INITIALIZATION ────────────────────────────────────────────────
     app.job_queue.run_once(lambda _: init_collections(), when=0)
@@ -839,6 +866,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     app.add_handler(CommandHandler("test_debts", test_debts_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
 
     # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
     single_buttons = [
