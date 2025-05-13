@@ -443,13 +443,10 @@ async def daily_price_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
 async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the custom price text entry."""
-    # Only act if we're in the middle of a custom-price prompt
-    uid = context.user_data.get("pending_price_user")
+    uid = context.user_data.get('pending_price_user')
     if uid is None:
-        return  # not a price prompt, ignore
-
-    text = update.message.text.strip().replace(",", "").replace(" ", "")
+        return  # ignore
+    text = update.message.text.replace(',','').strip()
     try:
         price = float(text)
         if price < 0:
@@ -457,19 +454,15 @@ async def handle_daily_price(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except ValueError:
         return await update.message.reply_text(
             "❌ Iltimos, haqiqiy raqam kiriting!",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Ortga", callback_data="back_to_admin")]
-            ])
+            reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
         )
-
-    # Save the new price and teardown
     await users_col.update_one({"telegram_id": uid}, {"$set": {"daily_price": price}})
     u = await users_col.find_one({"telegram_id": uid})
     await update.message.reply_text(
         f"✅ {u['name']} uchun kunlik narx {price:,.0f} so‘mga o‘zgartirildi!",
         reply_markup=get_admin_kb()
     )
-    context.user_data.pop("pending_price_user", None)
+    context.user_data.pop('pending_price_user', None)
     return ConversationHandler.END
 
 
@@ -949,62 +942,44 @@ async def handle_card_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ─── 9) NOTIFY ALL ─────────────────────────────────────────────────────────────
 async def notify_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("notify_all called")
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
         return await update.message.reply_text("❌ Siz admin emassiz.")
+    context.user_data['in_broadcast'] = True
     await update.message.reply_text(
-        "⚠️ Yuboriladigan xabarni kiriting yoki Ortga bosing:",
+        "Yuboriladigan xabarni kiriting:",
         reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
     )
     return S_NOTIFY_MESSAGE
 
 async def handle_notify_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('in_broadcast'):
+        return ConversationHandler.END
     text = update.message.text
     if text == BACK_BTN:
-        await update.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
-        return ConversationHandler.END
-
+        return await cancel_conversation(update, context)
     context.user_data['notify_message'] = text
-    confirm_kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Ha, yubor", callback_data="notify_confirm")],
-        [InlineKeyboardButton("❌ Bekor qil", callback_data="notify_cancel")],
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Ha, yubor", callback_data="notify_confirm")],
+        [InlineKeyboardButton("Bekor qil", callback_data="notify_cancel")],
     ])
-    await update.message.reply_text(
-        f"⚠️ Quyidagichani yuborishga rozimisiz?\n\n{text}",
-        reply_markup=confirm_kb
-    )
+    await update.message.reply_text(f"Confirm: {text}", reply_markup=kb)
     return S_NOTIFY_CONFIRM
 
 async def notify_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("callback data:", update.callback_query.data)
-    query = update.callback_query
-    await query.answer()
-    if query.data == "notify_cancel":
-        await query.message.edit_text("❌ Xabar yuborish bekor qilindi.")
-        await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
-        return ConversationHandler.END
-
-    # confirmed path
-    message = context.user_data['notify_message']
+    query = update.callback_query; await query.answer()
+    if query.data == 'notify_cancel':
+        return await cancel_conversation(update, context)
+    msg = context.user_data.get('notify_message','')
     users = await get_all_users_async()
-    await query.message.edit_text("⏳ Xabar yuborilmoqda…")
     sent = failed = 0
     for u in users:
         if not u.is_admin:
-            try:
-                await context.bot.send_message(u.telegram_id, message)
-                sent += 1
-            except:
-                failed += 1
-
-    summary = f"✅ {sent}/{len([u for u in users if not u.is_admin])} foydalanuvchiga yuborildi."
-    if failed:
-        summary += f"\n⚠️ {failed} kishi ololmadi."
-    await query.message.edit_text(summary)
-    await query.message.reply_text("🔧 Admin panelga qaytdingiz.", reply_markup=get_admin_kb())
+            try: await context.bot.send_message(u.telegram_id, msg); sent+=1
+            except: failed+=1
+    await query.message.edit_text(f"Yuborildi: {sent}, failed: {failed}")
+    context.user_data.pop('in_broadcast', None)
     return ConversationHandler.END
 
 
@@ -1027,43 +1002,37 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.clear()
     return ConversationHandler.END
 
+# ==================== CANCEL LUNCH ====================
 async def cancel_lunch_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the lunch cancellation process (admin only)."""
     if not await is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
         return ConversationHandler.END
-
-    context.user_data["in_cancel"] = True
+    context.user_data['in_cancel'] = True
     await update.message.reply_text(
-        "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY-MM-DD formatida yoki “bugun” deb yozing)",
+        "Qaysi kun uchun tushlikni bekor qilmoqchisiz? (YYYY-MM-DD yoki 'bugun')",
         reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
     )
     return S_CANCEL_DATE
 
 async def handle_cancel_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the date input for lunch cancellation."""
-    if not context.user_data.get("in_cancel"):
+    if not context.user_data.get('in_cancel'):
         return ConversationHandler.END
-
     text = update.message.text.strip().lower()
     if text == BACK_BTN:
         return await cancel_conversation(update, context)
-
-    if text == "bugun":
-        tz = pytz.timezone("Asia/Tashkent")
-        date_str = datetime.now(tz).strftime("%Y-%m-%d")
+    if text == 'bugun':
+        date_str = datetime.now(pytz.timezone('Asia/Tashkent')).strftime('%Y-%m-%d')
     else:
         try:
-            datetime.strptime(text, "%Y-%m-%d")
+            datetime.strptime(text, '%Y-%m-%d')
             date_str = text
         except ValueError:
             await update.message.reply_text(
-                "❌ Noto‘g‘ri format. Iltimos, YYYY-MM-DD yoki “bugun”.",
+                "❌ Noto‘g‘ri format. YYYY-MM-DD yoki 'bugun'.",
                 reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
             )
             return S_CANCEL_DATE
-
-    context.user_data["cancel_date"] = date_str
+    context.user_data['cancel_date'] = date_str
     await update.message.reply_text(
         f"{date_str} uchun sababni kiriting:",
         reply_markup=ReplyKeyboardMarkup([[BACK_BTN]], resize_keyboard=True)
@@ -1071,43 +1040,37 @@ async def handle_cancel_date(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return S_CANCEL_REASON
 
 async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the reason and process the cancellation."""
-    if not context.user_data.get("in_cancel"):
+    if not context.user_data.get('in_cancel'):
         return ConversationHandler.END
-
     text = update.message.text.strip()
     if text == BACK_BTN:
         return await cancel_conversation(update, context)
-
-    date_str = context.user_data.get("cancel_date")
+    date_str = context.user_data.get('cancel_date')
     if not date_str:
-        await update.message.reply_text("❌ Xatolik yuz berdi. Iltimos, qaytadan boshlang.")
+        await update.message.reply_text("❌ Xatolik. Qayta urinib ko'ring.")
         return ConversationHandler.END
-
     users = await get_all_users_async()
     affected = []
     for u in users:
-        if date_str in getattr(u, "attendance", []):
+        if date_str in u.attendance:
             u.balance += u.daily_price
-            await u._record_txn("refund", u.daily_price, f"Bekor: {date_str}")
+            await u._record_txn('refund', u.daily_price, f"Bekor: {date_str}")
             u.attendance.remove(date_str)
             u.food_choices.pop(date_str, None)
             await u.save()
             affected.append(u)
-
     for u in users:
-        msg = f"⚠️ {date_str} kuni tushlik bekor qilindi.\nSabab: {text}"
+        msg = f"⚠️ {date_str} tushlik bekor qilindi. Sabab: {text}"
         if u in affected:
             msg += f"\nBalansingizga {u.daily_price:,} so‘m qaytarildi."
         try:
             await context.bot.send_message(u.telegram_id, msg)
         except:
-            logger.warning(f"Could not notify {u.telegram_id}")
-
-    context.user_data.pop("in_cancel", None)
-    context.user_data.pop("cancel_date", None)
+            logger.warning(f"Notify failed {u.telegram_id}")
+    context.user_data.pop('in_cancel', None)
+    context.user_data.pop('cancel_date', None)
     await update.message.reply_text(
-        f"✅ {date_str} uchun tushlik bekor qilindi.\nJami {len(affected)} ta foydalanuvchi ta'sirlandi.",
+        f"✅ Bekor qilindi. {len(affected)} foydalanuvchi. ",
         reply_markup=get_admin_kb()
     )
     return ConversationHandler.END
@@ -1135,30 +1098,22 @@ def register_handlers(app):
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     app.add_handler(CommandHandler("test_debts", test_debts_command))
 
-    # ─── 2) NOTIFY CONVERSATION (/notify_all) ──────────────────────────
+     # Broadcast first
     notify_conv = ConversationHandler(
         entry_points=[
-            CommandHandler("notify_all", notify_all),
-            MessageHandler(filters.Regex(fr"^{re.escape(NOTIFY_BTN)}$"), notify_all),
+            CommandHandler('notify_all', notify_all),
+            MessageHandler(filters.Regex(f"^{re.escape(NOTIFY_BTN)}$"), notify_all)
         ],
         states={
-            S_NOTIFY_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_notify_message)
-            ],
-            S_NOTIFY_CONFIRM: [
-                CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
-            ],
+            S_NOTIFY_MESSAGE: [MessageHandler(filters.TEXT, handle_notify_message)],
+            S_NOTIFY_CONFIRM: [CallbackQueryHandler(notify_confirm_callback, pattern=r'^notify_(confirm|cancel)$')]
         },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-        ],
-        allow_reentry=True,
+        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation)],
         per_message=True,
-        name="notify_conversation",
+        allow_reentry=True,
+        name='notify'
     )
     app.add_handler(notify_conv)
-
     # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
     single_buttons = [
         (FOYD_BTN,         list_users_exec),
@@ -1180,24 +1135,14 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
 
-    # ─── 5) CANCEL LUNCH CONVERSATION ──────────────────────────────────
+ # Cancel-lunch conv
     cancel_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_BTN)}$"), cancel_lunch_day)],
         states={
-            S_CANCEL_DATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_date)
-            ],
-            S_CANCEL_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_cancel_reason)
-            ],
+            S_CANCEL_DATE: [MessageHandler(filters.TEXT, handle_cancel_date)],
+            S_CANCEL_REASON: [MessageHandler(filters.TEXT, handle_cancel_reason)]
         },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-        ],
-        allow_reentry=True,
-        per_message=True,
-        name="cancel_lunch_conversation"
+        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation)]
     )
     app.add_handler(cancel_conv)
 
@@ -1233,16 +1178,13 @@ def register_handlers(app):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
 
     # ─── 9) PRICE SETTING INLINE FLOW ──────────────────────────────────
-    price_patterns = [
-        r"^set_price:\d+$",
-        r"^confirm_price:\d+:\d+$",
-        r"^custom_price:\d+$",
-        r"^back_to_admin$",
-    ]
-    for p in price_patterns:
-        app.add_handler(CallbackQueryHandler(daily_price_callback, pattern=p))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_daily_price))
-
+     # Price flow
+    price_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
+        states={S_INPUT_PRICE: [MessageHandler(filters.TEXT, handle_daily_price)]},
+        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation)]
+    )
+    app.add_handler(price_conv)
     # ─── 10) NOTIFY RESPONSE INLINE (Optional) ─────────────────────────
     app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
 
