@@ -865,15 +865,14 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin only: cancel lunch on a given date, refund and notify everyone."""
-    # 1) Only admins
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
         return await update.message.reply_text("❌ Siz admin emassiz!")
 
-    # 2) Parse args: /cancel_lunch YYYY-MM-DD [reason...]
     if not context.args:
         return await update.message.reply_text(
-            "❌ Foydalanish: /cancel_lunch YYYY-MM-DD Sabab"
+            "❌ Foydalanish: /cancel_lunch YYYY-MM-DD Sabab", 
+            reply_markup=get_admin_kb()
         )
 
     raw_date, *reason_parts = context.args
@@ -888,12 +887,25 @@ async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYP
             date_str = raw_date
         except ValueError:
             return await update.message.reply_text(
-                "❌ Noto‘g‘ri sana formati. Iltimos: YYYY-MM-DD yoki “bugun”."
+                "❌ Noto‘g‘ri sana formati. Iltimos: YYYY-MM-DD yoki “bugun”.",
+                reply_markup=get_admin_kb()
             )
+
+    # ─── New: reject truly past dates ─────────────────────────────────────
+    tz = pytz.timezone("Asia/Tashkent")
+    today_date = datetime.now(tz).date()
+    date_obj   = datetime.strptime(date_str, "%Y-%m-%d").date()
+    if date_obj < today_date:
+        return await update.message.reply_text(
+            f"❌ {date_str} sanasi allaqachon o‘tgani uchun bekor qilib bo‘lmaydi.\n"
+            "Iltimos, bugungi yoki kelajakdagi sanani tanlang.",
+            reply_markup=get_admin_kb()
+        )
+    # ───────────────────────────────────────────────────────────────────────
 
     reason = " ".join(reason_parts).strip() or "Sabab ko‘rsatilmagan"
 
-    # 3) Record in “cancelled_lunches” so survey/summary skip it
+    # record cancellation
     col = await get_collection("cancelled_lunches")
     await col.update_one(
         {"date": date_str},
@@ -906,16 +918,14 @@ async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYP
         upsert=True
     )
 
-    # 4) Fetch all users and process refunds & notifications
+    # process refunds & notifications
     users = await get_all_users_async()
     refunded = 0
     for u in users:
-        # if they’d signed up → remove_attendance will refund & sync sheets
         if date_str in u.attendance:
             await u.remove_attendance(date_str)
             refunded += 1
 
-        # send them the cancellation notice
         text = (
             f"⚠️ {date_str} kuni tushlik bekor qilindi.\n\n"
             f"Sabab: {reason}"
@@ -931,13 +941,12 @@ async def cancel_lunch_command(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             logger.warning(f"Could not notify {u.telegram_id}")
 
-    # 5) Confirm back to admin
     await update.message.reply_text(
         f"✅ {date_str} uchun tushlik bekor qilindi.\n"
         f"Refund qilingan: {refunded} ta foydalanuvchi.",
         reply_markup=get_admin_kb()
     )
-
+    
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caller = await get_user_async(update.effective_user.id)
     if not (caller and caller.is_admin):
