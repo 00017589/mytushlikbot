@@ -1098,94 +1098,131 @@ def register_handlers(app):
     app.add_handler(CommandHandler("run_summary", run_summary_command))
     app.add_handler(CommandHandler("test_debts", test_debts_command))
 
-     # Broadcast first
+    # ─── 2) BROADCAST (/notify_all) ────────────────────────────────────
     notify_conv = ConversationHandler(
         entry_points=[
-            CommandHandler('notify_all', notify_all),
-            MessageHandler(filters.Regex(f"^{re.escape(NOTIFY_BTN)}$"), notify_all)
+            CommandHandler("notify_all", notify_all),
+            MessageHandler(filters.Regex(fr"^{re.escape(NOTIFY_BTN)}$"), notify_all),
         ],
         states={
-            S_NOTIFY_MESSAGE: [MessageHandler(filters.TEXT, handle_notify_message)],
-            S_NOTIFY_CONFIRM: [CallbackQueryHandler(notify_confirm_callback, pattern=r'^notify_(confirm|cancel)$')]
+            S_NOTIFY_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.Regex(fr"^{re.escape(BACK_BTN)}$"), handle_notify_message)
+            ],
+            S_NOTIFY_CONFIRM: [
+                CallbackQueryHandler(notify_confirm_callback, pattern=r"^notify_(confirm|cancel)$")
+            ],
         },
-        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation)],
+        fallbacks=[
+            MessageHandler(filters.Regex(fr"^{re.escape(BACK_BTN)}$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation),
+        ],
         per_message=True,
         allow_reentry=True,
-        name='notify'
+        name="notify_conversation",
     )
     app.add_handler(notify_conv)
-    # ─── 3) ADMIN SHORTCUTS (Reply‑Keyboard Buttons) ──────────────────
+
+    # ─── 3) PRICE-SETTING (/Kunlik Narx) ─────────────────────────────────
+    price_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(fr"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price),
+        ],
+        states={
+            # first the inline callbacks to select user / preset / custom
+            S_SET_PRICE: [
+                CallbackQueryHandler(
+                    daily_price_callback,
+                    pattern=r"^(set_price:\d+|confirm_price:\d+:\d+|custom_price:\d+|back_to_admin)$"
+                )
+            ],
+            # then free‐text entry for the “Boshqa narx” path
+            S_INPUT_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.Regex(fr"^{re.escape(BACK_BTN)}$"), handle_daily_price)
+            ],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(fr"^{re.escape(BACK_BTN)}$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation),
+        ],
+        per_message=True,
+        allow_reentry=True,
+        name="price_conversation",
+    )
+    app.add_handler(price_conv)
+
+    # ─── 4) CANCEL LUNCH (/Tushlikni Bekor Qilish) ───────────────────────
+    cancel_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(fr"^{re.escape(CXL_LUNCH_BTN)}$"), cancel_lunch_day)
+        ],
+        states={
+            S_CANCEL_DATE: [
+                MessageHandler(filters.TEXT & ~filters.Regex(fr"^{re.escape(BACK_BTN)}$"), handle_cancel_date)
+            ],
+            S_CANCEL_REASON: [
+                MessageHandler(filters.TEXT & ~filters.Regex(fr"^{re.escape(BACK_BTN)}$"), handle_cancel_reason)
+            ],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(fr"^{re.escape(BACK_BTN)}$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation),
+        ],
+        per_message=True,
+        allow_reentry=True,
+        name="cancel_lunch_conversation",
+    )
+    app.add_handler(cancel_conv)
+
+    # ─── 5) CARD MANAGEMENT ─────────────────────────────────────────────
+    card_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(fr"^{re.escape(CARD_BTN)}$"), start_card_management)
+        ],
+        states={
+            S_CARD_NUMBER: [
+                MessageHandler(filters.TEXT & ~filters.Regex(fr"^{re.escape(BACK_BTN)}$"), handle_card_number)
+            ],
+            S_CARD_OWNER: [
+                MessageHandler(filters.TEXT & ~filters.Regex(fr"^{re.escape(BACK_BTN)}$"), handle_card_owner)
+            ],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex(fr"^{re.escape(BACK_BTN)}$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation),
+        ],
+        per_message=True,
+        allow_reentry=True,
+        name="card_management_conversation",
+    )
+    app.add_handler(card_conv)
+
+    # ─── 6) ADMIN SHORTCUTS (REPLY-KEYBOARD) ────────────────────────────
     single_buttons = [
         (FOYD_BTN,         list_users_exec),
         (ADD_ADMIN_BTN,    start_add_admin),
         (REMOVE_ADMIN_BTN, start_remove_admin),
-        (DAILY_PRICE_BTN,  start_daily_price),
         (DELETE_USER_BTN,  start_delete_user),
-        (CXL_LUNCH_BTN,    cancel_lunch_day),
-        (CARD_BTN,         start_card_management),
         (KASSA_BTN,        show_kassa),
         (MENU_BTN,         menu_panel),
-        (BACK_BTN,         back_to_menu),  # Ortga always goes to menu
+        (BACK_BTN,         back_to_menu),
     ]
     for text, handler in single_buttons:
-        app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(text)}$"), handler))
+        app.add_handler(MessageHandler(filters.Regex(fr"^{re.escape(text)}$"), handler))
 
-    # ─── 4) ORTGA SHORTCUT (Reply & Inline) ────────────────────────────
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), back_to_menu))
-    app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^back_to_admin$"))
-
- # Cancel-lunch conv
-    cancel_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CXL_LUNCH_BTN)}$"), cancel_lunch_day)],
-        states={
-            S_CANCEL_DATE: [MessageHandler(filters.TEXT, handle_cancel_date)],
-            S_CANCEL_REASON: [MessageHandler(filters.TEXT, handle_cancel_reason)]
-        },
-        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation)]
-    )
-    app.add_handler(cancel_conv)
-
-    # ─── 6) CARD MANAGEMENT CONVERSATION ───────────────────────────────
-    card_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(CARD_BTN)}$"), start_card_management)],
-        states={
-            S_CARD_NUMBER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_number)
-            ],
-            S_CARD_OWNER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{re.escape(BACK_BTN)}$"), handle_card_owner)
-            ],
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation),
-            CommandHandler("cancel", cancel_conversation),
-        ],
-        allow_reentry=True,
-        per_message=True,
-        name="card_management_conversation"
-    )
-    app.add_handler(card_conv)
-
-    # ─── 7) INLINE CALLBACKS FOR USER MGMT ─────────────────────────────
+    # ─── 7) INLINE CALLBACKS FOR USER MGMT ──────────────────────────────
     app.add_handler(CallbackQueryHandler(add_admin_callback,    pattern=r"^add_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(remove_admin_callback, pattern=r"^remove_admin:\d+$"))
     app.add_handler(CallbackQueryHandler(delete_user_callback,  pattern=r"^delete_user:\d+$"))
 
-    # ─── 8) MENU INLINE FLOW & TEXT HANDLER ────────────────────────────
+    # ─── 8) MENU INLINE FLOW & TEXT ADD ───────────────────────────────
     menu_pattern = r"^(view_menu1|view_menu2|add_menu1|add_menu2|del_menu1|del_menu2|menu_back)$"
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=menu_pattern))
+    # the text handler for adding an item
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_add))
 
-    # ─── 9) PRICE SETTING INLINE FLOW ──────────────────────────────────
-     # Price flow
-    price_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DAILY_PRICE_BTN)}$"), start_daily_price)],
-        states={S_INPUT_PRICE: [MessageHandler(filters.TEXT, handle_daily_price)]},
-        fallbacks=[MessageHandler(filters.Regex(f"^{re.escape(BACK_BTN)}$"), cancel_conversation)]
+    # ─── 9) NOTIFY RESPONSE (yes/no) ───────────────────────────────────
+    app.add_handler(
+        CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$")
     )
-    app.add_handler(price_conv)
-    # ─── 10) NOTIFY RESPONSE INLINE (Optional) ─────────────────────────
-    app.add_handler(CallbackQueryHandler(notify_response_callback, pattern=r"^notify_response:(yes|no):\d+$"))
 
     logging.info("✅ All admin handlers registered.")
