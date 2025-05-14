@@ -23,29 +23,9 @@ daily_food_choices_col = None
 card_details_col = None
 menu_col = None
 
-async def get_collection(name: str):
-    """Return the requested collection, initializing DB if needed."""
-    global _client, db, users_col, kassa_col, daily_food_choices_col, card_details_col, menu_col
-
-    if _client is None:
-        await init_db()
-
-    if name == "users":
-        return users_col
-    if name == "kassa":
-        return kassa_col
-    if name == "daily_food_choices":
-        return daily_food_choices_col
-    if name == "card_details":
-        return card_details_col
-    if name == "menu":
-        return menu_col
-
-    raise ValueError(f"Unknown collection: {name}")
-
 async def init_db():
     """Initialize MongoDB client, collections, and indexes."""
-    global _client, db, users_col, kassa_col, daily_food_choices_col, card_details_col, menu_col
+    global _client, db, users_col, kassa_col, daily_food_choices_col, card_details_col, menu_col, cancelled_lunches_col
 
     _client = AsyncIOMotorClient(MONGODB_URI)
     db = _client["lunch_bot"]
@@ -73,6 +53,14 @@ async def init_db():
         [("date", 1), ("telegram_id", 1)], unique=True
     )
 
+    cancelled_lunches_col = db.get_collection("cancelled_lunches")
+    # ensure it exists
+    await cancelled_lunches_col.update_one(
+        {"_meta": "init"},
+        {"$setOnInsert": {"_meta": "init"}},
+        upsert=True
+    )
+
     # Card details
     await card_details_col.create_index("card_number", unique=True)
 
@@ -96,6 +84,26 @@ async def init_db():
     for name, defaults in (("menu1", []), ("menu2", [])):
         if not await menu_col.find_one({"name": name}):
             await menu_col.insert_one({"name": name, "items": defaults})
+
+async def get_collection(name: str):
+    """Return the requested collection, initializing DB if needed."""
+    global cancelled_lunches_col, _client, db, users_col, kassa_col, daily_food_choices_col, card_details_col, menu_col
+
+    if _client is None:
+        await init_db()
+
+    if name == "users":
+        return users_col
+    if name == "kassa":
+        return kassa_col
+    if name == "daily_food_choices":
+        return daily_food_choices_col
+    if name == "card_details":
+        return card_details_col
+    if name == "menu":
+        return menu_col
+
+    raise ValueError(f"Unknown collection: {name}")
 
 def run_init():
     """Sync helper to initialize DB before polling starts."""
