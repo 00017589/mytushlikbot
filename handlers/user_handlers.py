@@ -36,7 +36,7 @@ from utils.sheets_utils import find_user_in_sheet
 from handlers.admin_handlers import admin_panel
 
 logger = logging.getLogger(__name__)
-global cancelled_lunches_col
+cancelled_lunches_col = None
 
 # ─── BUTTON LABELS ───────────────────────────
 BAL_BTN   = "💸 Balansim"
