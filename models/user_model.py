@@ -16,27 +16,31 @@ class User:
         phone: str,
         balance: int = DEFAULT_INITIAL_BALANCE,
         daily_price: int = DEFAULT_DAILY_PRICE,
-        attendance: list = None,
-        transactions: list = None,
+        attendance: list[str] = None,
+        transactions: list[dict] = None,
         is_admin: bool = False,
         created_at: datetime = None,
-        declined_days: list = None,
+        declined_days: list[str] = None,
+        debt: float = 0.0,              # ← new
         _id: ObjectId = None,
         data: dict = None,
     ):
         data = data or {}
-        self._id = _id
-        self.telegram_id = data.get("telegram_id", telegram_id)
-        self.name = data.get("name", name)
-        self.phone = data.get("phone", phone)
-        self.balance = data.get("balance", balance)
-        self.daily_price = data.get("daily_price", daily_price)
-        self.attendance = data.get("attendance", attendance)
-        self.transactions = data.get("transactions", transactions)
-        self.is_admin = data.get("is_admin", is_admin)
-        self.created_at = created_at or datetime.now(timezone.utc)
-        self.declined_days = declined_days or []
-        self.food_choices    = data.get("food_choices", {})
+
+        self._id          = _id
+        self.telegram_id  = data.get("telegram_id", telegram_id)
+        self.name         = data.get("name", name)
+        self.phone        = data.get("phone", phone)
+        self.balance      = data.get("balance", balance)
+        self.daily_price  = data.get("daily_price", daily_price)
+        self.attendance   = data.get("attendance", attendance or [])
+        self.transactions = data.get("transactions", transactions or [])
+        self.is_admin     = data.get("is_admin", is_admin)
+        self.created_at   = created_at or datetime.now(timezone.utc)
+        self.declined_days= data.get("declined_days", declined_days or [])
+        self.debt         = data.get("debt", debt)       # ← set from Mongo or default
+        self.food_choices = data.get("food_choices", {})
+
 
     @classmethod
     async def create(cls, telegram_id, name, phone):
@@ -122,22 +126,24 @@ class User:
         return result
 
     async def add_attendance(self, date_str: str, food: str = None):
+        """
+        Mark attendance and push the daily_price as debt (Qarzlar) in Sheets.
+        """
         if date_str in self.attendance:
             return
 
-        # import here so it’s only loaded when needed
-        from utils.sheets_utils import get_price_from_sheet, update_user_balance_in_sheet
+        # only load these when needed
+        from utils.sheets_utils import get_price_from_sheet, update_user_debt_in_sheet
 
-        # 0) fetch live price from Sheets
+        # 0) fetch live price
         price = await get_price_from_sheet(self.telegram_id)
         self.daily_price = price
 
-        # 1) Deduct locally & record
+        # 1) record attendance locally (no balance change here)
         self.attendance.append(date_str)
-        self.balance -= price
         self._record_txn("attendance", -price, f"Lunch on {date_str}")
 
-        # 2) Save food choice if provided
+        # 2) save food choice if provided
         if food:
             col = await get_collection("daily_food_choices")
             await col.update_one(
@@ -151,49 +157,52 @@ class User:
                 upsert=True
             )
 
-        # 3) Persist in Mongo
+        # 3) persist in Mongo
         await self.save()
 
-        # 4) Push new balance back to Sheets (rollback on failure)
-        ok = await update_user_balance_in_sheet(self.telegram_id, self.balance)
+        # 4) push only debt to Sheets (rollback on failure)
+        ok = await update_user_debt_in_sheet(self.telegram_id, price)
         if not ok:
-            # rollback in‐memory & DB
-            self.balance += price
+            # rollback in-memory & DB
+            self.attendance.remove(date_str)
             self._record_txn("rollback", price, f"Rollback lunch on {date_str}")
             await self.save()
-            raise RuntimeError(f"Failed to sync balance for {self.telegram_id} → rollback")
+            raise RuntimeError(f"Failed to sync debt for {self.telegram_id}; rolled back")
 
 
     async def remove_attendance(self, date_str: str):
+        """
+        Undo attendance and subtract that daily_price from debt (Qarzlar) in Sheets.
+        """
         if date_str not in self.attendance:
             return
 
-        # import here so it’s only loaded when needed
-        from utils.sheets_utils import get_price_from_sheet, update_user_balance_in_sheet
+        from utils.sheets_utils import get_price_from_sheet, update_user_debt_in_sheet
 
-        # 0) fetch live price from Sheets
+        # 0) fetch live price
         price = await get_price_from_sheet(self.telegram_id)
         self.daily_price = price
 
-        # 1) Refund locally & record
+        # 1) remove attendance locally (no balance change here)
         self.attendance.remove(date_str)
-        self.balance += price
         await self._record_txn("cancel", price, f"Cancel lunch on {date_str}")
 
-        # 2) Remove food-choice record
+        # 2) remove the food-choice record
         col = await get_collection("daily_food_choices")
         await col.delete_one({"telegram_id": self.telegram_id, "date": date_str})
 
-        # 3) Persist in Mongo
+        # 3) persist in Mongo
         await self.save()
 
-        # 4) Push refunded balance back to Sheets (rollback on failure)
-        ok = await update_user_balance_in_sheet(self.telegram_id, self.balance)
+        # 4) push only debt decrease to Sheets (rollback on failure)
+        ok = await update_user_debt_in_sheet(self.telegram_id, -price)
         if not ok:
-            self.balance -= price
+            # rollback in-memory & DB
+            self.attendance.append(date_str)
             self._record_txn("rollback", -price, f"Rollback cancel on {date_str}")
             await self.save()
-            raise RuntimeError(f"Failed to sync refund for {self.telegram_id} → rollback")
+            raise RuntimeError(f"Failed to sync debt rollback for {self.telegram_id}")
+
         
     async def decline_attendance(self, date_str: str):
         if date_str not in self.declined_days:
