@@ -199,24 +199,49 @@ from telegram.constants import ParseMode
 from utils.sheets_utils import sync_balances_incremental
 
 async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user list from DB; sync balances *and* prices from Sheets first."""
+    """Show user list; sync both balances and daily_price from Sheets first."""
     try:
-        # 1) Sync balances
-        await update.message.reply_text("⏳ Balanslar yangilanmoqda…")
-        balances_updated = await sync_balances_incremental()
+        # 0) Get our users collection
+        users_col = await get_collection("users")
 
-        # 2) Sync daily prices
-        await update.message.reply_text("⏳ Narxlar yangilanmoqda…")
-        price_stats = await sync_prices_from_sheet()
-
-        # 3) Fetch all users with fresh balances & prices
+        # 1) Fetch all users (only the needed fields)
         cursor = users_col.find(
             {},
             {"telegram_id": 1, "name": 1, "balance": 1, "daily_price": 1}
         )
         mongo_users = await cursor.to_list(length=None)
 
-        # 4) Build the output
+        # 2) Sync balances
+        await update.message.reply_text("⏳ Balanslar yangilanmoqda…")
+        updated_balances = await sync_balances_incremental()
+
+        # 3) Sync daily_price for each user
+        await update.message.reply_text("⏳ Narxlar yangilanmoqda…")
+        for u in mongo_users:
+            try:
+                sheet_price = await sync_prices_from_sheet(u["telegram_id"])
+                if sheet_price != u.get("daily_price", 0):
+                    await users_col.update_one(
+                        {"telegram_id": u["telegram_id"]},
+                        {"$set": {"daily_price": sheet_price}}
+                    )
+                    u["daily_price"] = sheet_price
+            except Exception as price_err:
+                # log but don’t abort the whole flow
+                logger.warning(f"Failed to sync price for {u['telegram_id']}: {price_err}")
+
+        # 4) If balances changed, re-fetch those for display
+        if updated_balances:
+            changed = await users_col.find(
+                {"telegram_id": {"$in": [u["telegram_id"] for u in mongo_users]}},
+                {"telegram_id": 1, "balance": 1}
+            ).to_list(length=None)
+            bal_map = {x["telegram_id"]: x["balance"] for x in changed}
+            for u in mongo_users:
+                if u["telegram_id"] in bal_map:
+                    u["balance"] = bal_map[u["telegram_id"]]
+
+        # 5) Format & send
         if mongo_users:
             lines = [
                 f"• *{u['name']}* (ID: {u['telegram_id']})\n"
@@ -227,28 +252,16 @@ async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text = "Hech qanday foydalanuvchi yo‘q."
 
-        # 5) Send results
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-
-        # 6) (Optional) report how many were updated
-        report = []
-        if balances_updated:
-            report.append(f"🔄 Balans yangilandi: {balances_updated} taga")
-        if price_stats.get("success"):
-            report.append(f"🔄 Narx yangilandi: {price_stats['updated']} taga")
-        elif price_stats.get("error"):
-            report.append(f"❌ Narx sync xatolik: {price_stats['error']}")
-
-        if report:
-            await update.message.reply_text("\n".join(report))
-
-        # 7) Return to the admin panel
-        await update.message.reply_text("Admin panel:", reply_markup=get_admin_kb())
+        await update.message.reply_text(
+            "🔧 Admin panelga qaytdingiz:", 
+            reply_markup=get_admin_kb()
+        )
 
     except Exception as e:
-        logger.error(f"Error in list_users_exec: {e}", exc_info=True)
+        logger.error("Error in list_users_exec", exc_info=True)
         await update.message.reply_text(
-            "❌ Xatolik yuz berdi.",
+            f"❌ Foydalanuvchilar ro'yxatini olishda xatolik:\n{e}",
             reply_markup=get_admin_kb()
         )
 
