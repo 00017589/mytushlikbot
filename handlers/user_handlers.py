@@ -527,5 +527,4 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{YES}$"))
     app.add_handler(CallbackQueryHandler(attendance_cb, pattern=f"^{NO}$"))
     app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^food:"))
-    app.add_handler(CallbackQueryHandler(food_selection_cb, pattern="^cancel_attendance$"))
     app.add_handler(CallbackQueryHandler(cancel_lunch_callback, pattern="^cancel_(yes|no)$"))
