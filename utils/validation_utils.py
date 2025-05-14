@@ -5,6 +5,7 @@ from typing import Optional, List
 from telegram import ReplyKeyboardMarkup
 from models.user_model import User
 from database import get_collection
+from datetime import datetime, timezone
 
 _NAME_RE = re.compile(r"^[A-Za-z\u0400-\u04FF'][A-Za-z\u0400-\u04FF' ]{1,49}$")
 _PHONE_RE = re.compile(r"^\+?998\d{9}$")
@@ -51,18 +52,21 @@ async def get_user_async(telegram_id: int) -> Optional[User]:
 
     # unify on telegram_id
     t_id = doc.get("telegram_id") or doc.get("user_id")
+
     return User(
-        telegram_id = t_id,
-        name        = doc.get("name", ""),
-        phone       = doc.get("phone", ""),
-        balance     = doc.get("balance", 0),
-        daily_price = doc.get("daily_price", 0),
-        attendance  = doc.get("attendance", []),
-        transactions= doc.get("transactions", []),
-        is_admin    = bool(doc.get("is_admin")),
-        declined_days = doc.get("declined_days", []),
-        created_at  = doc.get("created_at"),
-        _id         = doc.get("_id"),
+        telegram_id   = t_id,
+        name          = doc.get("name", ""),
+        phone         = doc.get("phone", ""),
+        balance       = doc.get("balance", 0),
+        daily_price   = doc.get("daily_price", 0),
+        attendance    = doc.get("attendance", []) or [],
+        transactions  = doc.get("transactions", []) or [],
+        is_admin      = bool(doc.get("is_admin", False)),
+        declined_days = doc.get("declined_days", []) or [],
+        created_at    = doc.get("created_at") or datetime.now(timezone.utc),
+        _id           = doc.get("_id"),
+        # pass through all sheet‐related choices
+        data          = {"food_choices": doc.get("food_choices", {})}
     )
 
 async def get_all_users_async() -> List[User]:
@@ -70,21 +74,26 @@ async def get_all_users_async() -> List[User]:
     users_col = await get_collection("users")
     cursor = users_col.find({})
     users: List[User] = []
+
     async for doc in cursor:
         t_id = doc.get("telegram_id") or doc.get("user_id")
-        users.append(User(
-            telegram_id = t_id,
-            name        = doc.get("name", ""),
-            phone       = doc.get("phone", ""),
-            balance     = doc.get("balance", 0),
-            daily_price = doc.get("daily_price", 0),
-            attendance  = doc.get("attendance", []),
-            transactions= doc.get("transactions", []),
-            is_admin    = bool(doc.get("is_admin")),
-            declined_days = doc.get("declined_days", []),
-            created_at  = doc.get("created_at"),
-            _id         = doc.get("_id"),
-        ))
+        users.append(
+            User(
+                telegram_id   = t_id,
+                name          = doc.get("name", ""),
+                phone         = doc.get("phone", ""),
+                balance       = doc.get("balance", 0),
+                daily_price   = doc.get("daily_price", 0),
+                attendance    = doc.get("attendance", []) or [],
+                transactions  = doc.get("transactions", []) or [],
+                is_admin      = bool(doc.get("is_admin", False)),
+                declined_days = doc.get("declined_days", []) or [],
+                created_at    = doc.get("created_at") or datetime.now(timezone.utc),
+                _id           = doc.get("_id"),
+                data          = {"food_choices": doc.get("food_choices", {})}
+            )
+        )
+
     return users
 
 async def is_admin(telegram_id: int) -> bool:
