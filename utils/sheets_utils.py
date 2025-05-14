@@ -1,3 +1,5 @@
+# utils/sheets_utils.py
+
 import os
 import json
 import gspread
@@ -12,23 +14,27 @@ from telegram.ext import ContextTypes
 logger = logging.getLogger(__name__)
 
 SCOPES = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive'
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
 ]
-SHEET_NAME = 'tushlik'
-WORKSHEET_NAME = 'Sheet1'
+SHEET_NAME = "tushlik"
+WORKSHEET_NAME = "Sheet1"
+
 
 def get_creds():
     creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
     creds_dict = json.loads(creds_json)
     return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
+
 def to_async(func):
+    """Run a sync gspread call in the default executor."""
     @wraps(func)
     async def wrapper(*args, **kwargs):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
     return wrapper
+
 
 @to_async
 def _open_worksheet():
@@ -36,10 +42,14 @@ def _open_worksheet():
     sh = gc.open(SHEET_NAME)
     return sh.worksheet(WORKSHEET_NAME)
 
+
 async def get_worksheet():
+    """Async handle to your Google Sheet"""
     return await _open_worksheet()
 
+
 async def find_user_in_sheet(telegram_id: int) -> dict | None:
+    """Return the entire row dict for this user, or None."""
     ws = await get_worksheet()
     if not ws:
         return None
@@ -48,6 +58,7 @@ async def find_user_in_sheet(telegram_id: int) -> dict | None:
             return rec
     return None
 
+
 async def update_user_debt_in_sheet(telegram_id: int, delta: float) -> bool:
     """
     Add `delta` to the ‘Qarzlar’ column for this user.
@@ -55,40 +66,36 @@ async def update_user_debt_in_sheet(telegram_id: int, delta: float) -> bool:
     """
     try:
         ws = await get_worksheet()
-        # find the row for this user (telegram_id is in column B)
         cell = ws.find(str(telegram_id), in_column=2)
         row = cell.row
 
-        # figure out which column is “Qarzlar” (header row is 1)
         headers = ws.row_values(1)
-        debt_col = headers.index("Qarzlar") + 1  # 1-based
+        debt_col = headers.index("Qarzlar") + 1  # 1-based index for gspread
 
-        # read current debt, defaulting to 0
         raw = ws.cell(row, debt_col).value or "0"
-        current = float(str(raw).replace(",", "").strip())
-
-        # compute new debt
+        current = float(raw.replace(",", "").strip())
         new = current + delta
 
-        # write it back
         ws.update_cell(row, debt_col, str(new))
         return True
 
-    except Exception:
+    except Exception as e:
+        logger.error("update_user_debt_in_sheet error: %s", e)
         return False
 
-async def sync_balances_from_sheet(context=None) -> dict:
+
+async def sync_balances_from_sheet(context: ContextTypes.DEFAULT_TYPE = None) -> dict:
     """
-    Naïve full sync: fetch every row, update each in Mongo.
+    Full‐sheet sync: read EVERY row’s `balance` and overwrite Mongo.
     """
     ws = await get_worksheet()
     if not ws:
         return {"success": False, "error": "no worksheet"}
     updated = errors = 0
+
     for row in ws.get_all_records():
-        tid = row.get("telegram_id")
         try:
-            tid = int(tid)
+            tid = int(row.get("telegram_id"))
             bal = float(str(row.get("balance", 0)).replace(",", ""))
             res = await users_col.update_one(
                 {"telegram_id": tid},
@@ -97,48 +104,41 @@ async def sync_balances_from_sheet(context=None) -> dict:
             if res.modified_count:
                 updated += 1
         except Exception as e:
-            logger.error("sheet sync err %s", e)
+            logger.error("sync_balances_from_sheet error on row %r: %s", row, e)
             errors += 1
+
     return {"success": True, "updated": updated, "errors": errors}
 
-# in utils/sheets_utils.py
 
-async def sync_balances_incremental():
-    # 1) Grab a fresh handle to the users col
+async def sync_balances_incremental() -> list[int]:
+    """
+    Incremental sync: fetch sheet once, compare to Mongo snapshot,
+    and bulk‐write only changed balances. Returns list of updated IDs.
+    """
     users_collection = await get_collection("users")
 
-    # 2) Snapshot DB
     db_users = await users_collection.find(
         {}, {"telegram_id": 1, "balance": 1}
     ).to_list(length=None)
     db_map = {u["telegram_id"]: u["balance"] for u in db_users}
 
-    # 3) Fetch sheet rows once
-    worksheet = await get_worksheet()
-    rows = worksheet.get_all_records()
+    ws = await get_worksheet()
+    rows = ws.get_all_records()
 
     updates = []
     for row in rows:
-        # tolerate both "Telegram ID" and "TelegramID"
-        raw_id = row.get("telegram_id") 
+        raw_id = row.get("telegram_id")
         if not raw_id:
             continue
         try:
             tg_id = int(raw_id)
-        except ValueError:
+            bal_sheet = float(str(row.get("balance", 0)).replace(",", ""))
+        except Exception:
             continue
-
-        raw_bal = row.get("balance")
-        try:
-            bal_sheet = float(str(raw_bal).replace(",", ""))
-        except (TypeError, ValueError):
-            continue
-
         bal_db = db_map.get(tg_id)
         if bal_db is not None and bal_db != bal_sheet:
             updates.append((tg_id, bal_sheet))
 
-    # 4) Bulk update
     if updates:
         ops = [
             pymongo.UpdateOne({"telegram_id": tg}, {"$set": {"balance": bal}})
@@ -146,30 +146,28 @@ async def sync_balances_incremental():
         ]
         await users_collection.bulk_write(ops)
 
-    # return list of updated IDs
     return [tg for tg, _ in updates]
+
 
 async def get_price_from_sheet(telegram_id: int) -> float:
     """
-    Look up the row for this telegram_id in column B and return
-    the 'daily_price' from column E.
+    Look up this user’s `daily_price` (column E) live from the sheet.
     """
     ws = await get_worksheet()
-    # find returns a Cell with .row
     cell = ws.find(str(telegram_id), in_column=2)
-    raw = ws.cell(cell.row, 5).value  # column E is index 5 (1-based)
-    return float(raw.replace(',', '').strip())
+    raw = ws.cell(cell.row, 5).value  # 1-based
+    return float(raw.replace(",", "").strip())
+
 
 async def sync_prices_from_sheet(context: ContextTypes.DEFAULT_TYPE = None) -> dict:
     """
-    Fetches every row from the sheet and updates each user's `daily_price` in MongoDB.
+    Full‐sheet scan to update each user’s `daily_price` in Mongo.
     """
     ws = await get_worksheet()
     if not ws:
-        return {"success": False, "error": "Could not open worksheet"}
+        return {"success": False, "error": "could not open worksheet"}
     updated = errors = 0
 
-    # Assumes your sheet has columns: telegram_id | name | balance | ... | daily_price
     for row in ws.get_all_records():
         try:
             tid   = int(row.get("telegram_id", 0))
