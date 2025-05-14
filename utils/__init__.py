@@ -6,7 +6,7 @@ Utility functions for the lunch bot.
 
 from utils.sheets_utils import (
     get_worksheet,
-    update_user_balance_in_sheet,
+    update_user_debt_in_sheet,
     sync_balances_from_sheet,
     sync_balances_incremental,
     find_user_in_sheet
