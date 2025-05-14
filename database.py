@@ -102,6 +102,9 @@ async def get_collection(name: str):
         return card_details_col
     if name == "menu":
         return menu_col
+    
+    if name == "cancelled_lunches":
+        return cancelled_lunches_col
 
     raise ValueError(f"Unknown collection: {name}")
 
