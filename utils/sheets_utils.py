@@ -48,14 +48,32 @@ async def find_user_in_sheet(telegram_id: int) -> dict | None:
             return rec
     return None
 
-async def update_user_balance_in_sheet(telegram_id: int, new_balance: float) -> bool:
-    ws = await get_worksheet()
-    if not ws:
-        return False
+async def update_user_debt_in_sheet(telegram_id: int, delta: float) -> bool:
+    """
+    Add `delta` to the ‘Qarzlar’ column for this user.
+    Returns True on success, False on failure.
+    """
     try:
-        cell = ws.find(str(telegram_id))
-        ws.update_cell(cell.row, 3, new_balance)
+        ws = await get_worksheet()
+        # find the row for this user (telegram_id is in column B)
+        cell = ws.find(str(telegram_id), in_column=2)
+        row = cell.row
+
+        # figure out which column is “Qarzlar” (header row is 1)
+        headers = ws.row_values(1)
+        debt_col = headers.index("Qarzlar") + 1  # 1-based
+
+        # read current debt, defaulting to 0
+        raw = ws.cell(row, debt_col).value or "0"
+        current = float(str(raw).replace(",", "").strip())
+
+        # compute new debt
+        new = current + delta
+
+        # write it back
+        ws.update_cell(row, debt_col, str(new))
         return True
+
     except Exception:
         return False
 
