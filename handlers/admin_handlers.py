@@ -23,7 +23,7 @@ from telegram.ext import (
 )
 
 from database import get_collection
-from utils.sheets_utils import get_worksheet, update_user_balance_in_sheet, sync_balances_incremental
+from utils.sheets_utils import get_worksheet, sync_prices_from_sheet, sync_balances_incremental
 from utils import get_all_users_async, get_user_async, is_admin, get_default_kb
 from models.user_model import User
 from config import DEFAULT_DAILY_PRICE
@@ -199,53 +199,60 @@ from telegram.constants import ParseMode
 from utils.sheets_utils import sync_balances_incremental
 
 async def list_users_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user list from DB; incrementally sync balances from Sheets first."""
+    """Show user list from DB; sync balances *and* prices from Sheets first."""
     try:
-        # 1) Fetch all users from Mongo (only the needed fields)
+        # 1) Sync balances
+        await update.message.reply_text("⏳ Balanslar yangilanmoqda…")
+        balances_updated = await sync_balances_incremental()
+
+        # 2) Sync daily prices
+        await update.message.reply_text("⏳ Narxlar yangilanmoqda…")
+        price_stats = await sync_prices_from_sheet()
+
+        # 3) Fetch all users with fresh balances & prices
         cursor = users_col.find(
-            {}, 
+            {},
             {"telegram_id": 1, "name": 1, "balance": 1, "daily_price": 1}
         )
         mongo_users = await cursor.to_list(length=None)
 
-        # 2) Notify & perform incremental balance sync
-        await update.message.reply_text("⏳ Balanslar yangilanmoqda…")
-        updated_count = await sync_balances_incremental()
-
-        # 3) If any balances changed, re-fetch those users for fresh data
-        if updated_count:
-            changed_users = await users_col.find(
-                {"telegram_id": {"$in": [u["telegram_id"] for u in mongo_users]}},
-                {"telegram_id": 1, "balance": 1}
-            ).to_list(length=None)
-            balance_map = {u["telegram_id"]: u["balance"] for u in changed_users}
-            for u in mongo_users:
-                if u["telegram_id"] in balance_map:
-                    u["balance"] = balance_map[u["telegram_id"]]
-
-        # 4) Build and send the formatted list
+        # 4) Build the output
         if mongo_users:
             lines = [
                 f"• *{u['name']}* (ID: {u['telegram_id']})\n"
-                f"   💰 Balans: *{u['balance']:,}* so‘m | 📝 Narx: *{u.get('daily_price', 0):,}* so‘m"
+                f"   💰 Balans: *{u['balance']:,}* so‘m | 📝 Narx: *{u['daily_price']:,}* so‘m"
                 for u in mongo_users
             ]
             text = "\n\n".join(lines)
         else:
             text = "Hech qanday foydalanuvchi yo‘q."
 
+        # 5) Send results
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-        # 5) Return to admin panel
+
+        # 6) (Optional) report how many were updated
+        report = []
+        if balances_updated:
+            report.append(f"🔄 Balans yangilandi: {balances_updated} taga")
+        if price_stats.get("success"):
+            report.append(f"🔄 Narx yangilandi: {price_stats['updated']} taga")
+        elif price_stats.get("error"):
+            report.append(f"❌ Narx sync xatolik: {price_stats['error']}")
+
+        if report:
+            await update.message.reply_text("\n".join(report))
+
+        # 7) Return to the admin panel
         await update.message.reply_text("Admin panel:", reply_markup=get_admin_kb())
 
     except Exception as e:
         logger.error(f"Error in list_users_exec: {e}", exc_info=True)
         await update.message.reply_text(
-            "❌ Xatolik yuz berdi.", reply_markup=get_admin_kb()
+            "❌ Xatolik yuz berdi.",
+            reply_markup=get_admin_kb()
         )
 
     return ConversationHandler.END
-
 
 # ─── 4) ADMIN PROMOTION / DEMOTION ─────────────────────────────────────────────
 

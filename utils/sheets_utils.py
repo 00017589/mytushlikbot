@@ -6,7 +6,8 @@ import asyncio
 import pymongo
 from google.oauth2.service_account import Credentials
 from functools import wraps
-from database import users_col, get_collection
+from database import users_col
+from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
@@ -140,3 +141,29 @@ async def get_price_from_sheet(telegram_id: int) -> float:
     cell = ws.find(str(telegram_id), in_column=2)
     raw = ws.cell(cell.row, 5).value  # column E is index 5 (1-based)
     return float(raw.replace(',', '').strip())
+
+async def sync_prices_from_sheet(context: ContextTypes.DEFAULT_TYPE = None) -> dict:
+    """
+    Fetches every row from the sheet and updates each user's `daily_price` in MongoDB.
+    """
+    ws = await get_worksheet()
+    if not ws:
+        return {"success": False, "error": "Could not open worksheet"}
+    updated = errors = 0
+
+    # Assumes your sheet has columns: telegram_id | name | balance | ... | daily_price
+    for row in ws.get_all_records():
+        try:
+            tid   = int(row.get("telegram_id", 0))
+            price = float(str(row.get("daily_price", 0)).replace(",", "").strip())
+            res = await users_col.update_one(
+                {"telegram_id": tid},
+                {"$set": {"daily_price": price}}
+            )
+            if res.modified_count:
+                updated += 1
+        except Exception as e:
+            logger.error("sync_prices_from_sheet error on row %r: %s", row, e)
+            errors += 1
+
+    return {"success": True, "updated": updated, "errors": errors}
