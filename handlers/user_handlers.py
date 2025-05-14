@@ -36,6 +36,7 @@ from utils.sheets_utils import find_user_in_sheet
 from handlers.admin_handlers import admin_panel
 
 logger = logging.getLogger(__name__)
+global cancelled_lunches_col
 
 # ─── BUTTON LABELS ───────────────────────────
 BAL_BTN   = "💸 Balansim"
@@ -432,19 +433,19 @@ async def cancel_lunch_callback(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=get_default_kb(user.is_admin)
     )
 
-
 # ─── SCHEDULED JOBS ────────────────────────────
 async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
-    cancelled = await get_collection("cancelled_lunches")
-    if await cancelled.find_one({"date": today}):
-        # do nothing today
-        return
+        
     if now.weekday() >= 5:
         return
 
+    cancelled = await cancelled_lunches_col.find_one({"date": today})
+    if cancelled:
+        # nothing to do today
+        return
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("Ha", callback_data=YES),
          InlineKeyboardButton("Yo'q", callback_data=NO)]
