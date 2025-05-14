@@ -6,7 +6,7 @@ import asyncio
 import pymongo
 from google.oauth2.service_account import Credentials
 from functools import wraps
-from database import users_col
+from database import users_col, get_collection
 from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
