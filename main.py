@@ -125,7 +125,7 @@ def main():
         # Daily summary 10:00 Mon–Fri
         jq.run_daily(
             ah.send_summary,
-            time=dt_time(9, 46, tzinfo=tz),
+            time=dt_time(9, 40, tzinfo=tz),
             days=(1, 2, 3, 4, 5),
             name="daily_summary"
         )
