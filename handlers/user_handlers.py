@@ -2,7 +2,7 @@
 
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time
 import pytz
 from telegram.error import BadRequest
 from telegram.constants import ParseMode, ChatAction
@@ -367,7 +367,7 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup= get_default_kb(user.is_admin)
     )
     await q.message.reply_text(
-    "Agar tushlikga qatnashish fikridan voz kechsangiz soat 09:59 gacha "
+    "Agar tushlikga qatnashish fikridan voz kechsangiz soat 09:40 gacha "
     "bekor qilishingiz mumkin. Shunchaki /bekor_qilish buyrug‘ini bosing."
 )
 
@@ -385,7 +385,7 @@ async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # 2) After cutoff
-    if now.hour >= 10:
+    if now.time() >= time(9, 40):
         return await update.message.reply_text("❌ Bekor qilish vaqti o‘tdi.")
 
     # 3) Not in attendance
