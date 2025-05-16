@@ -332,39 +332,59 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q    = update.callback_query
+async def food_selection_cb(update, context):
+    q = update.callback_query
     await q.answer()
+
     user = await get_user_async(q.from_user.id)
 
+    # “Cancel” branch: immediate UI
     if q.data == "cancel_attendance":
-        # clear inline
         await q.message.edit_text("✅ Bekor qilindi.")
-        # fresh reply‐keyboard
         await q.message.reply_text(
             "Nimani xohlaysiz?",
             reply_markup=get_default_kb(user.is_admin)
         )
         return
 
-    # record choice
-    food = q.data.split(":",1)[1]
-    tz = pytz.timezone("Asia/Tashkent")
-    today_str = datetime.now(tz).strftime("%Y-%m-%d")
-    await user.set_food_choice(today_str, food)
-    await user.add_attendance(today_str, food)
+    # parse the food choice
+    food = q.data.split(":", 1)[1]
 
-    # clear or edit inline safely
+    # immediate UI update
     try:
         await q.message.edit_text(f"✅ {food} tanlandi!")
-    except BadRequest as e:
-        if "Message is not modified" not in str(e):
-            raise
+    except BadRequest:
+        # already edited, ignore
+        pass
 
+    # show the cancel tip right away
+    tz = pytz.timezone("Asia/Tashkent")
+    today_str = datetime.now(tz).strftime("%Y-%m-%d")
     await q.message.reply_text(
-    "Agar tushlikga qatnashish fikridan voz kechsangiz soat 09:40 gacha "
-    "bekor qilishingiz mumkin. Shunchaki /bekor_qilish buyrug‘ini bosing."
-)
+        "Agar tushlikka qatnashish fikridan voz kechsangiz soat 09:40 gacha "
+        "bekor qilishingiz mumkin. Shunchaki /bekor_qilish buyrug‘ini bosing.",
+        reply_markup=get_default_kb(user.is_admin)
+    )
+    import asyncio
+    # now fire off the real persistence in the background
+    asyncio.create_task(_persist_choice_and_attendance(user, today_str, food))
+
+
+async def _persist_choice_and_attendance(user, date_str, food):
+    """
+    Runs in background so your callback returns immediately.
+    Does exactly what you had before: set food choice, deduct balance,
+    sync to Sheets, etc.
+    """
+    try:
+        # record in Mongo & in-memory
+        await user.set_food_choice(date_str, food)
+        # this will deduct balance + log txn + push to Sheets
+        await user.add_attendance(date_str, food)
+    except Exception as e:
+        # log or notify admin if something goes wrong
+        import logging
+        logging.getLogger(__name__).error("Failed to persist attendance for %s: %s", user.telegram_id, e)
 
 async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for /bekor_qilish"""
