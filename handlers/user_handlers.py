@@ -361,11 +361,6 @@ async def food_selection_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "Message is not modified" not in str(e):
             raise
 
-    # then show balance and reply‑keyboard
-    await q.message.reply_text(
-        f"Balansingiz: {user.balance:,} so‘m",
-        reply_markup= get_default_kb(user.is_admin)
-    )
     await q.message.reply_text(
     "Agar tushlikga qatnashish fikridan voz kechsangiz soat 09:40 gacha "
     "bekor qilishingiz mumkin. Shunchaki /bekor_qilish buyrug‘ini bosing."
