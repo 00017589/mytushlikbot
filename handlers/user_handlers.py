@@ -275,13 +275,23 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q    = update.callback_query
+    q = update.callback_query
+
+    # ─── CUT-OFF CHECK: no answers after 09:40 ───────────────────
+    tz = pytz.timezone("Asia/Tashkent")
+    now_t = datetime.now(tz).time()
+    cutoff = time(9, 40)
+    if now_t >= cutoff:
+        await q.answer("So'rovnoma vaqti tugadi!", show_alert=True)
+        await q.edit_message_reply_markup(reply_markup=None)
+        return
+    # ─────────────────────────────────────────────────────────────
+
     await q.answer()
     user = await get_user_async(q.from_user.id)
-    tz   = pytz.timezone("Asia/Tashkent")
     today_str = datetime.now(tz).strftime("%Y-%m-%d")
 
-    # ─── NO branch ─────────────────────────────────────
+    # ─── NO branch ───────────────────────────────────────────────
     if q.data == NO:
         if today_str in user.attendance:
             await user.remove_attendance(today_str)
@@ -290,7 +300,7 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 1) clear inline
         await q.message.edit_text("❌ Bugungi tushlik rad etildi.")
 
-        # 2) send fresh reply‐keyboard
+        # 2) send fresh reply-keyboard
         kb = get_default_kb(user.is_admin)
         await context.bot.send_message(
             chat_id=q.from_user.id,
@@ -299,7 +309,7 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ─── already said YES ──────────────────────────────
+    # ─── already said YES ────────────────────────────────────────
     if today_str in user.attendance:
         # remove inline menu
         await q.message.edit_text(
@@ -313,16 +323,15 @@ async def attendance_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ─── YES first time → show foods ─────────────────
+    # ─── YES first time → show foods ─────────────────────────────
     if today_str in user.declined_days:
         await user.remove_decline(today_str)
 
-    tz       = pytz.timezone("Asia/Tashkent")
-    wd       = datetime.now(tz).weekday()
-    menu_name= "menu1" if wd in (0,2,4) else "menu2"
+    wd = datetime.now(tz).weekday()
+    menu_name = "menu1" if wd in (0, 2, 4) else "menu2"
     menu_col = await get_collection("menu")
-    doc      = await menu_col.find_one({"name": menu_name})
-    foods    = doc.get("items", [])
+    doc = await menu_col.find_one({"name": menu_name})
+    foods = doc.get("items", [])
 
     kb = [[InlineKeyboardButton(f, callback_data=f"food:{f}")] for f in foods]
     kb.append([InlineKeyboardButton("🔙 Ortga", callback_data="cancel_attendance")])
