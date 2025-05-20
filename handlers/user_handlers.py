@@ -370,7 +370,7 @@ async def food_selection_cb(update, context):
     tz = pytz.timezone("Asia/Tashkent")
     today_str = datetime.now(tz).strftime("%Y-%m-%d")
     await q.message.reply_text(
-        "Agar tushlikka qatnashish fikridan voz kechsangiz soat 09:40 gacha "
+        "Agar tushlikka qatnashish fikridan voz kechsangiz soat 10:00 gacha "
         "bekor qilishingiz mumkin. Shunchaki /bekor_qilish buyrug‘ini bosing.",
         reply_markup=get_default_kb(user.is_admin)
     )
@@ -395,6 +395,10 @@ async def _persist_choice_and_attendance(user, date_str, food):
         import logging
         logging.getLogger(__name__).error("Failed to persist attendance for %s: %s", user.telegram_id, e)
 
+async def get_admin_users_async():
+    users = await get_all_users_async()  # or whatever function returns all users
+    return [u for u in users if u.is_admin]
+
 async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point for /bekor_qilish"""
     tz = pytz.timezone("Asia/Tashkent")
@@ -409,7 +413,7 @@ async def cancel_lunch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # 2) After cutoff
-    if now.time() >= time(9, 40):
+    if now.time() >= time(10, 00):
         return await update.message.reply_text("❌ Bekor qilish vaqti o‘tdi.")
 
     # 3) Not in attendance
@@ -455,6 +459,21 @@ async def cancel_lunch_callback(update: Update, context: ContextTypes.DEFAULT_TY
         text="Bosh menyu:",
         reply_markup=get_default_kb(user.is_admin)
     )
+
+    # Notify other admins
+    admin_users = await get_admin_users_async()
+    for admin in admin_users:
+        if admin.telegram_id != user.telegram_id:
+            admin_notice = (
+                f"⚠️ <b>{user.name}</b> "
+                f"{'@' + user.username if user.username else ''} "
+                f"{today} uchun tushlik ro‘yxatidan chiqdi.\n"
+            )
+            await context.bot.send_message(
+                chat_id=admin.telegram_id,
+                text=admin_notice,
+                parse_mode="HTML"
+            )
 
 # ─── SCHEDULED JOBS ────────────────────────────
 async def morning_prompt(context: ContextTypes.DEFAULT_TYPE):
