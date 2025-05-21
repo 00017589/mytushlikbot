@@ -191,7 +191,7 @@ async def update_attendance_cell_in_sheet(telegram_id: int, value: int):
         return
     
     # Step 2: Find today's column
-    today = datetime.now().strftime("%d/%m")
+    today = f"{datetime.now().month}/{datetime.now().day}"
     if today not in headers:
         ws.update_cell(1, len(headers) + 1, today)  # Add today's column if missing
         col_num = len(headers) + 1
@@ -203,4 +203,4 @@ async def update_attendance_cell_in_sheet(telegram_id: int, value: int):
 
 async def clear_attendance_cell_in_sheet(telegram_id: int):
     """Clears today's attendance cell for a user in the Attendance sheet."""
-    await update_attendance_cell_in_sheet(telegram_id, "")
+    await update_attendance_cell_in_sheet(telegram_id, 0)
