@@ -702,16 +702,20 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Failed sending summary to admin {u.telegram_id}: {e}")
 
-    # notify each attendee
+    from utils.sheets_utils import get_balance_from_sheet  # make sure you have this function
+
     for u in attendees:
         try:
+            # ✅ fetch latest balance from Google Sheets
+            balance = await get_balance_from_sheet(u.telegram_id)
+
             if most:
                 if len(most) > 1:
                     foods = " va ".join(most)
                     text = (
                         "✅🍽️ Siz bugungi tushlik ro‘yxatidasiz.\n\n"
                         f"🥇 Bugun tanlangan taomlar: 🍛 {foods}\n"
-                        f"💰 Balansingiz: {u.balance:,.0f} so‘m\n\n"
+                        f"💰 Balansingiz: {balance:,.0f} so‘m\n\n"
                         "ℹ️ Agar tanlangan taom sizga to'g'ri kelmasa, "
                         "soat 10:00 gacha /bekor_qilish buyrug'i orqali ro'yxatdan chiqishingiz mumkin."
                     )
@@ -719,7 +723,7 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
                     text = (
                         "✅🍽️ Siz bugungi tushlik ro‘yxatidasiz.\n\n"
                         f"🥇 Bugun tanlangan taom: 🍛 {most[0]}\n"
-                        f"💰 Balansingiz: {u.balance:,.0f} so‘m\n\n"
+                        f"💰 Balansingiz: {balance:,.0f} so‘m\n\n"
                         "ℹ️ Agar tanlangan taom sizga to'g'ri kelmasa, "
                         "soat 10:00 gacha /bekor_qilish buyrug'i orqali ro'yxatdan chiqishingiz mumkin."
                     )
@@ -727,7 +731,7 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
                 text = (
                     "✅🍽️ Siz bugungi tushlik ro‘yxatidasiz.\n\n"
                     "🥄 Bugun asosiy taom aniqlanmadi.\n"
-                    f"💰 Balansingiz: {u.balance:,.0f} so‘m\n\n"
+                    f"💰 Balansingiz: {balance:,.0f} so‘m\n\n"
                     "ℹ️ Agar tanlangan taom sizga to'g'ri kelmasa, "
                     "soat 10:00 gacha /bekor_qilish buyrug'i orqali ro'yxatdan chiqishingiz mumkin."
                 )
@@ -735,7 +739,6 @@ async def send_summary(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(u.telegram_id, text, reply_markup=get_default_kb(u.is_admin))
         except Exception as e:
             logger.error(f"Failed user recap for {u.telegram_id}: {e}")
-
 # ─── CARD MANAGEMENT ─────────────────────────────────────────────────────────
 
 # ─── /karta_raqami — set card number ────────────────────────────────────────────
