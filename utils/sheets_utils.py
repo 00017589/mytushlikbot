@@ -37,16 +37,14 @@ def to_async(func):
 
 
 @to_async
-def _open_worksheet():
+def _open_worksheet(sheet_name: str = WORKSHEET_NAME):
     gc = gspread.authorize(get_creds())
     sh = gc.open(SHEET_NAME)
-    return sh.worksheet(WORKSHEET_NAME)
+    return sh.worksheet(sheet_name)
 
-
-async def get_worksheet():
-    """Async handle to your Google Sheet"""
-    return await _open_worksheet()
-
+async def get_worksheet(sheet_name: str = WORKSHEET_NAME):
+    """Async handle to any worksheet in the spreadsheet."""
+    return await _open_worksheet(sheet_name)
 
 async def find_user_in_sheet(telegram_id: int) -> dict | None:
     """Return the entire row dict for this user, or None."""
@@ -200,3 +198,35 @@ async def sync_prices_from_sheet(context: ContextTypes.DEFAULT_TYPE = None) -> d
             errors += 1
 
     return {"success": True, "updated": updated, "errors": errors}
+
+from datetime import datetime
+async def update_attendance_cell_in_sheet(telegram_id: int, value: str):
+    """Marks a cell in the 'Attendance' sheet for today's column."""
+    ws = await get_worksheet("Attendance")
+    all_data = ws.get_all_records()
+    headers = ws.row_values(1)
+    
+    # Step 1: Find user row
+    row_num = None
+    for idx, row in enumerate(all_data, start=2):  # Header is row 1
+        if str(row.get("telegram_id")) == str(telegram_id):
+            row_num = idx
+            break
+    if row_num is None:
+        logger.warning(f"User {telegram_id} not found in Attendance sheet.")
+        return
+    
+    # Step 2: Find today's column
+    today = datetime.now().strftime("%d/%m")
+    if today not in headers:
+        ws.update_cell(1, len(headers) + 1, today)  # Add today's column if missing
+        col_num = len(headers) + 1
+    else:
+        col_num = headers.index(today) + 1
+    
+    # Step 3: Write attendance
+    ws.update_cell(row_num, col_num, value)
+
+async def clear_attendance_cell_in_sheet(telegram_id: int):
+    """Clears today's attendance cell for a user in the Attendance sheet."""
+    await update_attendance_cell_in_sheet(telegram_id, "")
