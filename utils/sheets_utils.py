@@ -56,32 +56,6 @@ async def find_user_in_sheet(telegram_id: int) -> dict | None:
             return rec
     return None
 
-
-async def update_user_debt_in_sheet(telegram_id: int, delta: float) -> bool:
-    """
-    Add `delta` to the ‘Qarzlar’ column for this user.
-    Returns True on success, False on failure.
-    """
-    try:
-        ws = await get_worksheet()
-        cell = ws.find(str(telegram_id), in_column=2)
-        row = cell.row
-
-        headers = ws.row_values(1)
-        debt_col = headers.index("Qarzlar") + 1  # 1-based index for gspread
-
-        raw = ws.cell(row, debt_col).value or "0"
-        current = float(raw.replace(",", "").strip())
-        new = current + delta
-
-        ws.update_cell(row, debt_col, str(new))
-        return True
-
-    except Exception as e:
-        logger.error("update_user_debt_in_sheet error: %s", e)
-        return False
-
-
 async def sync_balances_from_sheet(context: ContextTypes.DEFAULT_TYPE = None) -> dict:
     """
     Full‐sheet sync: read EVERY row’s `balance` and overwrite Mongo.
@@ -200,7 +174,7 @@ async def sync_prices_from_sheet(context: ContextTypes.DEFAULT_TYPE = None) -> d
     return {"success": True, "updated": updated, "errors": errors}
 
 from datetime import datetime
-async def update_attendance_cell_in_sheet(telegram_id: int, value: str):
+async def update_attendance_cell_in_sheet(telegram_id: int, value: int):
     """Marks a cell in the 'Attendance' sheet for today's column."""
     ws = await get_worksheet("Attendance")
     all_data = ws.get_all_records()

@@ -126,15 +126,11 @@ class User:
         return result
 
     async def add_attendance(self, date_str: str, food: str = None):
-        """
-        Mark attendance and push the daily_price as debt (Qarzlar) in Sheets.
-        """
         if date_str in self.attendance:
             return
 
         # only load these when needed
-        from utils.sheets_utils import get_price_from_sheet, update_user_debt_in_sheet
-
+        from utils.sheets_utils import get_price_from_sheet, update_attendance_cell_in_sheet
         # 0) fetch live price
         price = await get_price_from_sheet(self.telegram_id)
         self.daily_price = price
@@ -161,7 +157,7 @@ class User:
         await self.save()
 
         # 4) push only debt to Sheets (rollback on failure)
-        ok = await update_user_debt_in_sheet(self.telegram_id, price)
+        ok = await update_attendance_cell_in_sheet(self.telegram_id, price)
         if not ok:
             # rollback in-memory & DB
             self.attendance.remove(date_str)
@@ -177,7 +173,7 @@ class User:
         if date_str not in self.attendance:
             return
 
-        from utils.sheets_utils import get_price_from_sheet, update_user_debt_in_sheet
+        from utils.sheets_utils import get_price_from_sheet, clear_attendance_cell_in_sheet
 
         # 0) fetch live price
         price = await get_price_from_sheet(self.telegram_id)
@@ -195,7 +191,7 @@ class User:
         await self.save()
 
         # 4) push only debt decrease to Sheets (rollback on failure)
-        ok = await update_user_debt_in_sheet(self.telegram_id, -price)
+        ok = await clear_attendance_cell_in_sheet(self.telegram_id)
         if not ok:
             # rollback in-memory & DB
             self.attendance.append(date_str)
