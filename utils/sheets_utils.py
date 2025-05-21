@@ -148,6 +148,23 @@ async def sync_balances_incremental() -> list[int]:
 
     return [tg for tg, _ in updates]
 
+async def get_balance_from_sheet(telegram_id: int) -> float:
+    """
+    Returns the latest balance from the sheet for a single user.
+    """
+    ws = await get_worksheet()
+    if not ws:
+        raise RuntimeError("Worksheet not available")
+    
+    for row in ws.get_all_records():
+        try:
+            if int(row.get("telegram_id")) == telegram_id:
+                return float(str(row.get("balance", 0)).replace(",", ""))
+        except Exception as e:
+            logger.error(f"Error parsing row for user {telegram_id}: {e}")
+            continue
+
+    raise ValueError(f"No balance found in sheet for telegram_id={telegram_id}")
 
 async def get_price_from_sheet(telegram_id: int) -> float:
     """
